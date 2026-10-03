@@ -221,6 +221,14 @@ class GeminiValidResponseTests(CleanEnv):
         self.assertIsNone(cfg.tool_config)
         self.assertEqual(cfg.temperature, 0)
 
+    def test_automatic_function_calling_is_explicitly_disabled(self):
+        fake = FakeGeminiClient(text=good_reply())
+        gemini_with(fake).analyze_message(CEO_MESSAGE)
+        cfg = fake.calls[0]["config"]
+        self.assertIsNone(cfg.tools)
+        self.assertIsNotNone(cfg.automatic_function_calling)
+        self.assertTrue(cfg.automatic_function_calling.disable)
+
     def test_json_schema_matches_the_validator(self):
         from app.services.message_analysis.schema import EXTRACTION_KEYS
 
@@ -291,6 +299,21 @@ class GeminiFailureTests(CleanEnv):
         self.assert_labelled_fallback(result, "HTTP 429")
         self.assertNotIn("quota", result.fallback_reason)
 
+    def test_http_503_becomes_ai_unavailable_and_is_never_labelled_ai(self):
+        class FakeApiError(Exception):
+            code = 503
+
+        fake = FakeGeminiClient(error=FakeApiError(f"overloaded {SECRET}"))
+        with self.assertRaises(ExtractionError) as ctx:
+            self.run_service(fake, mode="ai")
+        self.assertEqual(ctx.exception.code, "ai_unavailable")
+        self.assertIn("HTTP 503", ctx.exception.message)
+        self.assertNotIn(SECRET, ctx.exception.message)
+        self.assertNotIn("overloaded", ctx.exception.message)
+        result = self.run_service(fake, mode="auto")  # auto: labelled demo fallback, never "ai"
+        self.assert_labelled_fallback(result, "HTTP 503")
+        self.assertNotEqual(result.mode, "ai")
+
     def test_unknown_failure_falls_back_without_leaking(self):
         result = self.run_service(FakeGeminiClient(error=RuntimeError(f"boom {SECRET}")))
         self.assert_labelled_fallback(result, "could not be reached")
@@ -348,6 +371,71 @@ class GeminiSdkOverMockTransportTests(CleanEnv):
         self.assertEqual([list(p) for p in parts], [["text"]])  # text only, nothing else
         self.assertIn(CEO_MESSAGE, parts[0]["text"])
 
+    def test_request_body_has_no_function_calling_fields(self):
+        seen = {}
+
+        def handler(request):
+            seen["body"] = json.loads(request.content)
+            return self.ok(json.dumps(good_reply()))
+
+        self.provider(handler).analyze_message(CEO_MESSAGE)
+        body = seen["body"]
+        # Structural check (the prompt text itself says "you have no tools").
+        self.assertEqual(set(body), {"contents", "systemInstruction", "generationConfig"})
+        forbidden = {"tools", "toolConfig", "functionDeclarations", "automaticFunctionCalling", "googleSearch", "codeExecution"}
+        self.assertFalse(forbidden & set(body))
+        self.assertFalse(forbidden & set(body["generationConfig"]))
+
+    def test_sdk_does_not_log_the_afc_warning(self):
+        from google.genai import models as genai_models
+
+        genai_models.Models._logged_afc_warning = False  # the SDK logs it once per process
+        with self.assertNoLogs("google_genai", level="WARNING"):
+            self.provider(lambda r: self.ok(json.dumps(good_reply()))).analyze_message(CEO_MESSAGE)
+
+    def test_final_503_after_sdk_retries_becomes_ai_unavailable(self):
+        hits = []
+
+        def handler(request):
+            hits.append(1)
+            return httpx.Response(503, json={"error": {"code": 503, "message": f"unavailable {SECRET}", "status": "UNAVAILABLE"}})
+
+        provider = self.provider(handler)
+        with mock.patch("tenacity.nap.time.sleep"):  # keep the SDK's backoff instant in tests
+            with self.assertRaises(ExtractionError) as ctx:
+                with mock.patch("app.services.message_analysis.service.build_provider", return_value=provider):
+                    analyze_message(CEO_MESSAGE, settings=settings(mode="ai"))
+        self.assertEqual(ctx.exception.code, "ai_unavailable")
+        self.assertIn("HTTP 503", ctx.exception.message)
+        self.assertNotIn(SECRET, ctx.exception.message)
+        self.assertEqual(len(hits), gemini_module.RETRY_ATTEMPTS)  # bounded, SDK-native retry only
+
+    def test_transient_503_then_success_is_accepted(self):
+        hits = []
+
+        def handler(request):
+            hits.append(1)
+            if len(hits) == 1:
+                return httpx.Response(503, json={"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}})
+            return self.ok(json.dumps(good_reply()))
+
+        with mock.patch("tenacity.nap.time.sleep"):
+            extraction = self.provider(handler).analyze_message(CEO_MESSAGE)
+        self.assertEqual(extraction.payment_amount, 1850000)
+        self.assertEqual(len(hits), 2)
+
+    def test_quota_429_is_not_retried(self):
+        hits = []
+
+        def handler(request):
+            hits.append(1)
+            return httpx.Response(429, json={"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}})
+
+        with self.assertRaises(ProviderError) as ctx:
+            self.provider(handler).analyze_message(CEO_MESSAGE)
+        self.assertIn("HTTP 429", str(ctx.exception))
+        self.assertEqual(len(hits), 1)
+
     def test_http_error_body_is_not_echoed(self):
         def handler(request):
             return httpx.Response(403, json={"error": {"code": 403, "message": f"key {SECRET} rejected", "status": "PERMISSION_DENIED"}})
@@ -361,8 +449,9 @@ class GeminiSdkOverMockTransportTests(CleanEnv):
         def handler(request):
             raise httpx.ReadTimeout("slow", request=request)
 
-        with self.assertRaises(ProviderError) as ctx:
-            self.provider(handler).analyze_message(CEO_MESSAGE)
+        with mock.patch("tenacity.nap.time.sleep"):
+            with self.assertRaises(ProviderError) as ctx:
+                self.provider(handler).analyze_message(CEO_MESSAGE)
         self.assertIn("timed out", str(ctx.exception))
 
     def test_blocked_prompt_without_candidates_becomes_provider_error(self):

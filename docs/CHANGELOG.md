@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.1 (patch) - Gemini 503 / AFC diagnostic fix
+
+Gemini provider only; risk engine, behaviour, attachment analysis, case workflow, weights and the extraction schema are untouched.
+
+### Changed
+- `providers/gemini.py`: `automatic_function_calling` is now explicitly disabled. The google-genai SDK enters its AFC code path by default even with no tools and logs "Direct use of automatic function calling (AFC) in Models.generate_content is not recommended"; that log was harmless noise (no tools, no function map, one request) but is now gone and "no AFC" is explicit.
+- `providers/gemini.py`: SDK-native bounded retry (`HttpRetryOptions`, 3 attempts, 1-4 s backoff, status 500/502/503/504; 429 is not retried). The SDK does NOT retry unless `retry_options` is set, so previously a single 503 failed immediately. No custom retry loop. A final 503 still becomes `ProviderError -> ai_unavailable` (HTTP 502 from the API) and is never labelled as AI.
+
+### Tests
+- 7 new tests in `tests/test_ai_providers.py` (AFC disabled, no AFC warning logged, no function-calling fields in the request body, 503 -> `ai_unavailable`, final 503 after SDK retries, 503-then-success, 429 not retried). 323 total. No real Gemini call is made.
+
 ## 0.7.1 - 2026-10-03 - Provider-agnostic AI adapter (Gemini primary)
 
 Not a feature: replaces the Anthropic-only message-extraction integration with a provider adapter. The risk engine, risk weights/thresholds/levels, correlation rules, case workflow, behaviour and attachment analysis, and the 12-field extraction schema are untouched.
