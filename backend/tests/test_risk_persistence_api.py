@@ -15,7 +15,7 @@ try:
 except ImportError:  # pragma: no cover
     HAVE_FASTAPI = False
 
-_ENV_KEYS = ("TRUSTBREAK_DB_PATH", "TRUSTBREAK_SEED_DEMO", "TRUSTBREAK_AI_MODE", "ANTHROPIC_API_KEY")
+_ENV_KEYS = ("TRUSTBREAK_DB_PATH", "TRUSTBREAK_SEED_DEMO", "TRUSTBREAK_AI_MODE", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "TRUSTBREAK_AI_PROVIDER")
 
 NORMAL = {
     "sender_name": "Arvind Rao", "sender_role": "Chief Executive Officer", "sender_known": True,
@@ -46,6 +46,8 @@ class PersistedRiskApiTests(unittest.TestCase):
         os.environ["TRUSTBREAK_SEED_DEMO"] = "1"
         os.environ["TRUSTBREAK_AI_MODE"] = self.mode
         os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop("GEMINI_API_KEY", None)
+        os.environ.pop("TRUSTBREAK_AI_PROVIDER", None)
         self._start()
 
     def _start(self):

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.1 - 2026-10-03 - Provider-agnostic AI adapter (Gemini primary)
+
+Not a feature: replaces the Anthropic-only message-extraction integration with a provider adapter. The risk engine, risk weights/thresholds/levels, correlation rules, case workflow, behaviour and attachment analysis, and the 12-field extraction schema are untouched.
+
+### Added
+- `services/message_analysis/providers/` (`base`, `gemini`, `anthropic`, `mock`): contract `analyze_message(text) -> MessageExtraction`. LLM providers implement only `complete(system, user)`; prompt, parsing and strict validation are shared, not duplicated.
+- Gemini provider on the official `google-genai` SDK (new dependency, `google-genai>=2.28,<3.0`): one text-only call with JSON output and a response schema derived from the existing schema (`extraction_json_schema()`); no tools, no files, no attachment bytes. The reply is still validated by `validate_extraction`.
+- Configuration: `TRUSTBREAK_AI_PROVIDER` (`gemini`/`mock`/`anthropic`), `GEMINI_API_KEY`, `TRUSTBREAK_AI_MODEL` (default per provider, `gemini-3.8-flash`, defined only in `config.py`). `TRUSTBREAK_AI_MODE` (`auto`/`ai`/`mock`) is preserved. Precedence: `MODE=mock` > `PROVIDER` > `GEMINI_API_KEY` > lone `ANTHROPIC_API_KEY` > `gemini`.
+- Provenance fields on the message-analysis result and API response: `provider`, `requested_provider`, `is_fallback` (additive; `mode` and `extraction` unchanged).
+- Tests: 42 new in `tests/test_ai_providers.py` (selection/precedence, config, missing key, valid structured reply, malformed JSON, schema failures, timeout/HTTP/SDK failure, blocked response, secret non-leakage, mock provider, real SDK over a mocked httpx transport, HTTP provenance, risk result identical for equivalent evidence, AST import boundaries) - 316 total. No test makes a real Gemini call.
+
+### Changed
+- Fallback wording: a missing key, failed or timed-out call, unparsable reply or schema failure now reports "Gemini analysis failed: ... Using demo/mock extraction (not AI)" (or the no-key equivalent). Mock output is never attributed to a model.
+- Message Analysis card (title no longer says "AI"): "AI analysis - Gemini" (with the model name), "Demo mode - rule-based, not AI", or "Gemini unavailable - using demo extraction". It states that risk comes from the deterministic engine.
+- `ai_provider.py` is now a compatibility shim over `providers/`. Existing API tests also clear `GEMINI_API_KEY`/`TRUSTBREAK_AI_PROVIDER` so a developer's real key can never trigger a live call from the suite.
+
+### Notes
+- Anthropic support is kept but no longer required or the default.
+- No live Gemini call was made in this change (no key in the environment); see PROJECT_STATE.
+
 ## 0.7.0 - 2026-10-03 - Case workflow & analyst decision audit
 
 ### Added

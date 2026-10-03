@@ -57,7 +57,26 @@ Open <http://localhost:5173>. You should see the dashboard with one incident (th
 
 ## AI message analysis (optional)
 
-The incident detail page has an **AI Message Analysis** card (extracts authority, amount, beneficiary, urgency, secrecy, deadline and financial intent from the message; extraction only, not a fraud decision). It works with no setup in clearly labelled **demo mode** (rule-based, not AI). For real AI, copy `.env.example`, set `ANTHROPIC_API_KEY`, and export the variables before starting the backend (`set -a; source .env; set +a`). `TRUSTBREAK_AI_MODE=auto|ai|mock` controls fallback behaviour.
+The incident detail page has a **Message Analysis** card (extracts authority, amount, beneficiary, urgency, secrecy, deadline and financial intent from the message; extraction only, not a fraud decision). It works with no setup in clearly labelled **demo mode** (rule-based, not AI).
+
+**Gemini (primary AI provider).** Copy `.env.example` to `.env`, set `GEMINI_API_KEY` (create one at https://aistudio.google.com/apikey), keep `TRUSTBREAK_AI_PROVIDER=gemini`, and export the variables before starting the backend (`set -a; source .env; set +a`). The model is `TRUSTBREAK_AI_MODEL` (default `gemini-3.8-flash`). Then `pip install -r requirements.txt` (adds `google-genai`).
+
+| Variable | Meaning |
+|---|---|
+| `TRUSTBREAK_AI_PROVIDER` | `gemini` / `mock` / `anthropic` (legacy) |
+| `GEMINI_API_KEY` | Gemini key; read from the environment by the backend only, never sent to the browser |
+| `TRUSTBREAK_AI_MODEL` | Model name for the selected provider; empty = that provider's default |
+| `TRUSTBREAK_AI_MODE` | `auto` (default, fall back to demo), `ai` (error instead of fallback), `mock` (force offline demo) |
+| `TRUSTBREAK_AI_TIMEOUT_SECONDS` | 1-120, default 20 |
+| `ANTHROPIC_API_KEY` | Legacy; only needed with `TRUSTBREAK_AI_PROVIDER=anthropic` |
+
+**Precedence:** `TRUSTBREAK_AI_MODE=mock` always forces offline demo; otherwise `TRUSTBREAK_AI_PROVIDER` decides; if it is unset, `GEMINI_API_KEY` selects Gemini, else a lone `ANTHROPIC_API_KEY` selects Anthropic (legacy setups), else Gemini is the default (and with no key the app falls back to the demo extractor).
+
+**Offline:** `TRUSTBREAK_AI_PROVIDER=mock` - no key, no network.
+
+**Fallback is always labelled.** If the key is missing, the request fails or times out, or the reply is not valid JSON for the schema, the card says *"Gemini unavailable · using demo extraction"* with the reason, and the result is marked rule-based, not AI. Mock output is never presented as AI-generated. The card shows *"AI analysis · Gemini"* only when Gemini's reply passed strict validation.
+
+**Gemini only extracts fields from the message text.** It does not score risk, decide fraud, call tools, browse URLs or see attachments; the deterministic risk engine remains authoritative.
 
 ## API
 
@@ -83,7 +102,7 @@ All responses share one envelope.
 { "success": false, "error": { "code": "validation_error", "message": "...", "details": [{ "field": "amount", "message": "..." }] } }
 ```
 
-Error codes: `validation_error` (422), `not_found` (404), `case_already_closed` (409), `method_not_allowed` (405), `internal_error` (500), plus `ai_not_configured` (503), `ai_unavailable` / `ai_invalid_response` (502) from the message-analysis endpoint in `TRUSTBREAK_AI_MODE=ai`.
+Error codes: `validation_error` (422), `not_found` (404), `case_already_closed` (409), `method_not_allowed` (405), `internal_error` (500), plus `ai_not_configured` (503), `ai_unavailable` / `ai_invalid_response` (502) from the message-analysis endpoint in `TRUSTBREAK_AI_MODE=ai` (in the default `auto` mode these failures become a labelled demo fallback instead).
 
 Try it from the command line:
 
@@ -114,6 +133,8 @@ npm run build
 | `TRUSTBREAK_DB_PATH` | `<repo>/data/trustbreak.db` | SQLite file location |
 | `TRUSTBREAK_SEED_DEMO` | `1` | Set to `0` to skip inserting the demo incident on an empty database |
 | `TRUSTBREAK_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated allowed origins |
+
+The AI variables (`TRUSTBREAK_AI_PROVIDER`, `GEMINI_API_KEY`, `TRUSTBREAK_AI_MODEL`, `TRUSTBREAK_AI_MODE`, `TRUSTBREAK_AI_TIMEOUT_SECONDS`) are described in *AI message analysis* above.
 
 **Reset the data:** stop the backend, delete `data/trustbreak.db`, start it again.
 

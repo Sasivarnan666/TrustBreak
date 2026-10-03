@@ -46,22 +46,38 @@ Frontend and backend share nothing except the REST contract below.
 ### Message analysis service (`services/message_analysis/`)
 
 ```
-message ──> analyze_message() ──┬─ AI mode:   prompt.py -> ai_provider.py (Anthropic, stdlib urllib)
- (untrusted)                    │                 reply -> parse_model_reply -> validate_extraction (strict)
-                                └─ mock mode: mock_extractor.py (regex rules, NOT AI) -> same validate_extraction
-                                          ▼
-                              MessageAnalysis { mode, model, extraction, notes, fallback_reason, is_final_decision=false }
+Message (untrusted)
+   |
+   v
+AI provider adapter  (providers/: Gemini | Anthropic legacy | Mock)
+   |   LLM providers: prompt.py -> complete(system, user) -> parse_model_reply -> validate_extraction (strict)
+   |   Mock provider: mock_extractor.py (regex rules, NOT AI) -> same validate_extraction
+   v
+Structured MessageExtraction  (12 fixed fields, unchanged)
+   |
+   v   (consumed by the risk assessment orchestration, never raw LLM output)
+Behaviour analysis  +  Attachment analysis  ->  deterministic Risk Correlation  ->  Risk assessment
 ```
+
+`analyze_message()` returns `MessageAnalysis { mode, model, extraction, notes, fallback_reason, provider, requested_provider, is_fallback, is_final_decision=false }`. `mode` is `ai` / `mock` / `skipped`; `provider` is who produced the extraction; `is_fallback` is true only when an AI provider was wanted but the demo extractor ran.
 
 | Module | Responsibility |
 |---|---|
-| `schema.py` | Dataclasses + `validate_extraction` (exact keys, enums, types, ranges). Stdlib only. |
+| `schema.py` | Dataclasses, `validate_extraction` (exact keys, enums, types, ranges; authoritative), `extraction_json_schema()` (derived from the same constants, sent to Gemini as the structured-output request). Stdlib only. |
 | `prompt.py` | System prompt (message = untrusted data) and per-request random-delimiter wrapping |
-| `ai_provider.py` | One HTTPS call to the Anthropic Messages API; raises `ProviderError`; never echoes secrets |
-| `mock_extractor.py` | Deterministic demo rules; output also passes `validate_extraction` |
-| `service.py` | Mode selection (`auto`/`ai`/`mock`), fallback policy, `ExtractionError` |
+| `providers/base.py` | `MessageProvider` contract `analyze_message(text) -> MessageExtraction`, `LLMProvider` (prompt + parse + validate, once, for every LLM backend), `ProviderError` |
+| `providers/gemini.py` | Official `google-genai` SDK, one text-only `generate_content` call, JSON mime type + response schema, no tools; errors carry a status code only |
+| `providers/anthropic.py` | Legacy Anthropic Messages API (stdlib urllib); kept, not required |
+| `providers/mock.py` | Offline demo provider wrapping `mock_extractor.py` |
+| `providers/__init__.py` | `build_provider(name, key, model, timeout)` |
+| `ai_provider.py` | Backward-compatible re-exports (`AnthropicClient`, `ProviderError`) |
+| `service.py` | Provider selection result, fallback policy (`auto`/`ai`/`mock`), provenance labels, `ExtractionError` |
 
-Rules: nothing outside this package imports the provider or the prompt; the router calls only `analyze_message`; a future risk engine reads `MessageAnalysis.extraction` and has no LLM dependency. The core is stdlib-only (testable without FastAPI); the pydantic models in `schemas.py` (`MessageAnalysisOut`…) only shape the HTTP response. `POST /api/incidents/{id}/analyze-message` is computed on demand and not stored.
+Configuration (`app/config.py`) is the only place that reads the environment or names a default model. Provider precedence: `TRUSTBREAK_AI_MODE=mock` > `TRUSTBREAK_AI_PROVIDER` > `GEMINI_API_KEY` > lone `ANTHROPIC_API_KEY` (legacy) > `gemini`.
+
+Rules: nothing outside this package imports a provider or the prompt (AST-tested for the risk, behaviour and attachment packages); the router and the risk assessment call only `analyze_message`; the risk engine reads `MessageAnalysis.extraction` and has no LLM dependency and never sees raw model text. The core is stdlib-only apart from the lazily imported `google-genai`; the pydantic models in `schemas.py` (`MessageAnalysisOut`...) only shape the HTTP response. `POST /api/incidents/{id}/analyze-message` is computed on demand and not stored.
+
+**Security boundaries of the provider call.** The message is untrusted data (random delimiters, never in the system prompt). The Gemini request is text only: no tools/function calling, no URL context, no search grounding, no code execution, no files or attachment bytes. Replies are validated; unknown keys (an injected `risk_level`) are rejected. The API key is read from the environment on the backend, travels only in the SDK's auth header, and is never logged, returned or put in an error message. The model cannot change status, scores or case state: it has no access to them. **Gemini does not determine the final risk score** - the deterministic risk engine does.
 
 ### Behaviour service (`services/behaviour/`)
 

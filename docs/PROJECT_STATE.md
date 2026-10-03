@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-10-03 · Version 0.7.0 (… + persisted risk assessment & real incident status + **case workflow & analyst decision audit**) · backend: 274 tests, 190 passed + 84 skipped in the authoring sandbox (no FastAPI there; the 84 HTTP tests must be run on a networked machine, see the 0.7.0 section) · frontend: compile + server-render checks passed, `npm run build` not run there_
+_Last updated: 2026-10-03 · Version 0.7.1 (0.7.0 + **provider-agnostic AI adapter, Gemini primary**) · backend: 316 tests, 316 passed, 0 skipped (fresh venv with FastAPI/httpx) · frontend: `npm run build` passed · live Gemini call NOT run (no key)_
 
 ## What was implemented
 
@@ -12,6 +12,37 @@ A runnable full-stack foundation, flow: **React form → FastAPI → SQLite → 
 - Docs: README, ARCHITECTURE, ROADMAP, CHANGELOG, DEMO_SCENARIO, this file.
 
 _The two bullets above describe 0.1.0. Later versions add message extraction (0.2.0), behaviour signals (0.3.0), attachment analysis (0.4.0) and the on-demand Risk Correlation Engine (0.5.0, below). The **stored** placeholder analysis is unchanged; the risk assessment is computed on demand and not stored._
+
+## Change in 0.7.1: Provider-agnostic AI adapter, Gemini primary (COMPLETED, not a feature)
+
+Replaced the Anthropic-only extraction integration with a provider adapter. Gemini is the primary provider; the labelled mock is preserved; Anthropic is kept as an optional legacy provider and is no longer required. **Unchanged:** the risk engine and its weights/thresholds/levels/recommended actions/correlation rules, the case workflow, the UI layout, and the 12-field extraction schema with all its validation rules.
+
+Flow: `Message -> provider adapter (Gemini | mock | Anthropic) -> validated structured extraction -> existing behaviour analysis -> existing attachment analysis -> existing deterministic risk correlation -> risk assessment`. **Gemini does not determine the risk score**; it only fills the extraction fields.
+
+- **Providers:** `services/message_analysis/providers/{base,gemini,anthropic,mock}.py`; contract `analyze_message(text) -> MessageExtraction`. Prompt building, reply parsing and strict validation are shared in `base.py`. Gemini uses the official `google-genai` SDK (only new dependency) with JSON mime type + a response schema built from the existing schema constants; `validate_extraction` remains the authority.
+- **Environment:** `TRUSTBREAK_AI_PROVIDER=gemini|mock|anthropic`, `GEMINI_API_KEY`, `TRUSTBREAK_AI_MODEL` (default per provider; Gemini default `gemini-3.8-flash`, defined only in `config.py`), `TRUSTBREAK_AI_MODE=auto|ai|mock` (kept), `TRUSTBREAK_AI_TIMEOUT_SECONDS`. **Precedence:** `MODE=mock` > `PROVIDER` > `GEMINI_API_KEY` > lone `ANTHROPIC_API_KEY` (legacy) > `gemini`.
+- **Mock mode:** `TRUSTBREAK_AI_PROVIDER=mock` (or `MODE=mock`): offline, no key, labelled "Demo mode - rule-based, not AI".
+- **Fallback:** in `auto`, a missing key, failed/timed-out call, blocked/empty reply, unparsable JSON or schema failure returns the labelled demo extraction with `is_fallback: true`, `provider: "mock"`, `model: null` and a reason ("Gemini analysis failed: ... Using demo/mock extraction (not AI)"). In `ai` mode these are errors (`ai_not_configured` 503, `ai_unavailable` / `ai_invalid_response` 502). The UI never labels mock output as AI.
+- **Provenance fields (additive):** message-analysis result/API gained `provider`, `requested_provider`, `is_fallback`.
+- **Security boundaries:** message is untrusted data (random delimiters, never in the system prompt); text-only request, no tools / URL context / grounding / code execution, no attachment bytes (attachment analysis stays local and deterministic); key from the environment, backend only, never logged or placed in errors (status code only); unknown/injected fields such as `risk_level` are rejected; the model has no access to scores, status or case state.
+- **UI:** card title is now "Message Analysis"; labels "AI analysis - Gemini", "Demo mode - rule-based, not AI", "Gemini unavailable - using demo extraction"; states that risk comes from the deterministic engine.
+
+### Verification (this change)
+| Check | Result |
+|---|---|
+| `python -m unittest discover -s tests -t . -v` (fresh venv: FastAPI 0.142.2, httpx 0.28.1, pydantic 2.13.5, google-genai 2.28.0) | **316 run, 316 passed, 0 failed, 0 skipped** - includes the 84 HTTP tests that the 0.7.0 sandbox had to skip (they now ran and passed) |
+| New provider tests | 42, all with fake clients or an httpx `MockTransport`; no real Gemini call |
+| Existing message-analysis (32), risk-correlation (57), case-workflow (58) tests | Passing, existing test bodies unmodified (only env hygiene lines added to two API test files) |
+| `npm run build` | **Passed** (Vite, 50 modules) |
+| Card rendered server-side in Gemini / mock / fallback states | Labels as specified; no "detected by Gemini" wording (not a browser) |
+| **Live Gemini call** | **NOT run: no `GEMINI_API_KEY` in the verification environment.** The real SDK was exercised only against a mocked HTTP transport, so real-model extraction quality and the exact structured-output behaviour of the live API are unverified. Run once with a key before relying on it. |
+
+### Known limitations (0.7.1)
+- Live Gemini behaviour untested (above). The default model name comes from Google's published model page at the time of writing; models are retired over time, so a 404 shows up as a labelled fallback until `TRUSTBREAK_AI_MODEL` is updated.
+- A stale `TRUSTBREAK_AI_MODEL=claude-...` left from an Anthropic setup is not auto-corrected when the provider is Gemini; it fails visibly (HTTP 404, labelled fallback).
+- Structured output is a request to the model, not a guarantee; the validator rejects non-conforming replies (they fall back, they are never repaired).
+- The extraction is only as good as the model's reading of one message; confidence is the model's self-report.
+- All earlier limitations remain (see the sections below).
 
 ## Release verification pass (v0.4.0) - 2026-10-03
 

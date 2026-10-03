@@ -2,32 +2,39 @@
 
     analyze_message(message) -> MessageAnalysis
 
-Callers (the API router today, a risk engine later) get validated structured
-data and never touch the LLM directly. Modes:
+Callers (the API router, the risk assessment) get validated structured data and
+never touch an LLM directly. The flow is:
 
-  ai    a real model answered and its JSON passed strict validation
-  mock  deterministic demo rules (no key configured, or AI failed in `auto`)
+    message -> provider adapter (Gemini | Anthropic | mock) -> validated extraction
+
+Result `mode` (always labelled, never blurred):
+
+  ai       a real model answered and its JSON passed strict validation
+  mock     deterministic demo rules (offline mode, no key, or the provider failed in `auto`)
   skipped  nothing to analyze (empty message); no extractor ran
+
+`provider` says which backend produced the extraction; `is_fallback` is True only
+when an AI provider was wanted but the demo extractor was used instead.
 """
 
-import json
-import re
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
 from ... import config
-from . import mock_extractor, prompt
-from .ai_provider import AnthropicClient, ProviderError
-from .schema import ExtractionValidationError, MessageAnalysis, empty_extraction, validate_extraction
+from .providers import PROVIDER_LABELS, CompletionProvider, MockProvider, ProviderError, build_provider
+from .providers.base import parse_model_reply  # noqa: F401 - re-exported for existing importers
+from .schema import ExtractionValidationError, MessageAnalysis, empty_extraction
 
 MAX_MESSAGE_CHARS = 5000  # same ceiling as the incident form
-MAX_MODEL_REPLY_CHARS = 20_000
 
 MOCK_NOTES = [
     "Demo mode: these values come from simple keyword rules, NOT from an AI model.",
     "Confidence in demo mode only reflects how many fields the rules could fill.",
 ]
-AI_NOTES = ["Extracted by an AI model and validated against a strict schema. Extraction only - not a fraud decision."]
+AI_NOTES = [
+    "Extracted by an AI model and validated against a strict schema. Extraction only - not a fraud decision "
+    "and not the risk score; the deterministic risk engine decides risk."
+]
 
 
 class ExtractionError(Exception):
@@ -47,44 +54,45 @@ class CompletionClient(Protocol):
 
 @dataclass(frozen=True)
 class AISettings:
-    mode: str  # auto | ai | mock
+    mode: str  # auto | ai | mock  (failure policy; `mock` forces offline)
     api_key: Optional[str]
     model: str
     timeout: float
+    provider: str = "gemini"  # gemini | anthropic | mock
 
 
 def load_settings() -> AISettings:
+    provider = config.get_ai_provider()
     return AISettings(
         mode=config.get_ai_mode(),
-        api_key=config.get_ai_api_key(),
-        model=config.get_ai_model(),
+        api_key=config.get_ai_api_key(provider),
+        model=config.get_ai_model(provider),
         timeout=config.get_ai_timeout(),
+        provider=provider,
     )
 
 
-def parse_model_reply(text: str) -> dict:
-    """Turn the model's reply into a dict, or raise ExtractionValidationError."""
-    if not isinstance(text, str) or not text.strip():
-        raise ExtractionValidationError("empty AI reply")
-    if len(text) > MAX_MODEL_REPLY_CHARS:
-        raise ExtractionValidationError("AI reply too long")
-    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
-    try:
-        parsed = json.loads(cleaned)
-    except ValueError:
-        raise ExtractionValidationError("AI reply is not valid JSON") from None
-    if not isinstance(parsed, dict):
-        raise ExtractionValidationError("AI reply is not a JSON object")
-    return parsed
+def _label(provider: str) -> str:
+    return PROVIDER_LABELS.get(provider, provider.capitalize())
 
 
-def _mock_result(text: str, notes: list, fallback_reason: Optional[str]) -> MessageAnalysis:
+def _mock_result(
+    text: str,
+    notes: list,
+    fallback_reason: Optional[str],
+    *,
+    requested: str,
+    is_fallback: bool,
+) -> MessageAnalysis:
     return MessageAnalysis(
         mode="mock",
         model=None,
-        extraction=mock_extractor.extract(text),
+        extraction=MockProvider().analyze_message(text),
         notes=MOCK_NOTES + notes,
         fallback_reason=fallback_reason,
+        provider="mock",
+        requested_provider=requested,
+        is_fallback=is_fallback,
     )
 
 
@@ -102,6 +110,7 @@ def analyze_message(
     if not isinstance(message, str):
         raise TypeError("message must be a string")
     settings = settings or load_settings()
+    requested = settings.provider if settings.mode != "mock" else "mock"
 
     text = message.strip()
     if not text:
@@ -110,33 +119,58 @@ def analyze_message(
             model=None,
             extraction=empty_extraction(),
             notes=["The message is empty, so nothing was analyzed."],
+            requested_provider=requested,
         )
     notes = []
     if len(text) > MAX_MESSAGE_CHARS:
         text = text[:MAX_MESSAGE_CHARS]
         notes.append(f"Message was truncated to {MAX_MESSAGE_CHARS} characters before analysis.")
 
+    # Offline / demo selected on purpose: no network, not a fallback.
     if settings.mode == "mock":
-        return _mock_result(text, notes, "Demo mode was selected (TRUSTBREAK_AI_MODE=mock).")
+        return _mock_result(text, notes, "Demo mode was selected (TRUSTBREAK_AI_MODE=mock).", requested="mock", is_fallback=False)
+    if settings.provider == "mock":
+        return _mock_result(text, notes, "Demo mode was selected (TRUSTBREAK_AI_PROVIDER=mock).", requested="mock", is_fallback=False)
 
-    if client is None and settings.api_key:
-        client = AnthropicClient(settings.api_key, settings.model, settings.timeout)
-    if client is None:
+    label = _label(settings.provider)
+    if client is not None:
+        provider = CompletionProvider(client, settings.provider)
+    else:
+        provider = build_provider(settings.provider, settings.api_key, settings.model, settings.timeout)
+    if provider is None:
+        key_var = config.AI_KEY_ENV_VARS.get(settings.provider, "an API key")
         if settings.mode == "ai":
-            raise ExtractionError("ai_not_configured", "AI mode is required but no API key is configured.")
-        return _mock_result(text, notes, "No AI API key is configured.")
+            raise ExtractionError("ai_not_configured", f"AI mode is required but no API key is configured ({key_var}).")
+        return _mock_result(
+            text,
+            notes,
+            f"No AI API key is configured ({key_var} is not set); {label} was not called. Using demo/mock extraction.",
+            requested=settings.provider,
+            is_fallback=True,
+        )
 
-    delimiter = prompt.new_delimiter()
     try:
-        reply = client.complete(prompt.SYSTEM_PROMPT, prompt.build_user_content(text, delimiter))
-        extraction = validate_extraction(parse_model_reply(reply))
+        extraction = provider.analyze_message(text)
     except ProviderError as exc:
         code, reason = "ai_unavailable", str(exc)
     except ExtractionValidationError as exc:
         code, reason = "ai_invalid_response", f"AI reply was rejected by validation ({exc})"
     else:
-        return MessageAnalysis(mode="ai", model=getattr(client, "model", None), extraction=extraction, notes=AI_NOTES + notes)
+        return MessageAnalysis(
+            mode="ai",
+            model=getattr(provider, "model", None),
+            extraction=extraction,
+            notes=AI_NOTES + notes,
+            provider=provider.name,
+            requested_provider=settings.provider,
+        )
 
     if settings.mode == "ai":
         raise ExtractionError(code, reason)
-    return _mock_result(text, notes, f"{reason}; showing the demo rule-based result instead.")
+    return _mock_result(
+        text,
+        notes,
+        f"{label} analysis failed: {reason}. Using demo/mock extraction (not AI).",
+        requested=settings.provider,
+        is_fallback=True,
+    )

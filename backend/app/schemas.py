@@ -230,6 +230,9 @@ class MessageAnalysisOut(BaseModel):
     notes: list[str]
     fallback_reason: Optional[str] = None
     is_final_decision: bool = False  # always False: extraction only
+    provider: Optional[str] = None  # gemini | anthropic | mock - which backend produced the extraction
+    requested_provider: Optional[str] = None
+    is_fallback: bool = False  # True: an AI provider was wanted but the demo extractor ran
 
 
 class MessageAnalysisResponse(BaseModel):

@@ -20,6 +20,9 @@ function formatAmount(amount, currency) {
   return currency ? `${currency} ${n}` : n;
 }
 
+const PROVIDER_LABELS = { gemini: "Gemini", anthropic: "Anthropic", mock: "Demo" };
+const providerLabel = (p) => PROVIDER_LABELS[p] ?? (p ? p.charAt(0).toUpperCase() + p.slice(1) : "AI");
+
 const dash = <span className="font-normal text-slate-400">Not stated</span>;
 const orDash = (value) => (value == null || value === "" ? dash : value);
 
@@ -28,18 +31,24 @@ export function MessageAnalysisView({ analysis }) {
   const { extraction: x, mode } = analysis;
   const isAi = mode === "ai";
   const isMock = mode === "mock";
+  // An AI provider was wanted but the rule-based demo extractor ran instead.
+  const isFallback = isMock && analysis.is_fallback === true;
 
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        {isAi && <Tag tone="brand">AI mode{analysis.model ? ` · ${analysis.model}` : ""}</Tag>}
-        {isMock && <Tag tone="amber">Demo mode · rule-based, not AI</Tag>}
+        {isAi && <Tag tone="brand">AI analysis · {providerLabel(analysis.provider)}</Tag>}
+        {isAi && analysis.model && <Tag>{analysis.model}</Tag>}
+        {isFallback && <Tag tone="amber">{providerLabel(analysis.requested_provider)} unavailable · using demo extraction</Tag>}
+        {isFallback && <Tag>Rule-based, not AI</Tag>}
+        {isMock && !isFallback && <Tag tone="amber">Demo mode · rule-based, not AI</Tag>}
         {mode === "skipped" && <Tag>Nothing to analyze</Tag>}
         <Tag>Extracted information only</Tag>
       </div>
 
       <p className="mb-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
-        These are details extracted from the message text. This is <strong>not</strong> a fraud decision or risk score.
+        These are details extracted from the message text. This is <strong>not</strong> a fraud decision or risk score;
+        risk is calculated separately by TrustBreak's deterministic engine.
       </p>
 
       {analysis.fallback_reason && (
@@ -107,7 +116,7 @@ export default function MessageAnalysisCard({ incidentId }) {
   const busy = state.status === "loading";
   return (
     <Card
-      title="AI Message Analysis"
+      title="Message Analysis"
       aside={
         <Button variant="secondary" onClick={run} disabled={busy}>
           {busy ? "Analyzing…" : state.status === "done" ? "Run again" : "Extract message details"}
@@ -117,7 +126,7 @@ export default function MessageAnalysisCard({ incidentId }) {
       {state.status === "idle" && (
         <p className="text-sm text-slate-600">
           Extract who is asking, what they want paid, to whom, and how much pressure is used. This is extracted information
-          only, not the final fraud decision.
+          only: the message extractor does not decide risk, and the risk score comes from TrustBreak's deterministic engine.
         </p>
       )}
       {busy && (

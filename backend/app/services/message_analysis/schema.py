@@ -84,6 +84,10 @@ class MessageAnalysis:
     notes: list = field(default_factory=list)
     fallback_reason: Optional[str] = None  # why mock was used instead of AI
     is_final_decision: bool = False  # extraction only - never a fraud verdict
+    # Provenance (added with the provider adapter; the extraction schema is unchanged):
+    provider: Optional[str] = None  # provider that produced `extraction`: gemini | anthropic | mock | None
+    requested_provider: Optional[str] = None  # provider the configuration asked for
+    is_fallback: bool = False  # True when an AI provider was wanted but the demo extractor was used
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -208,3 +212,42 @@ def validate_extraction(raw: Any) -> MessageExtraction:
         extracted_entities=_entities(raw["extracted_entities"]),
         confidence=round(float(confidence), 4),
     )
+
+
+# --------------------------------------------------------------------------- #
+# JSON Schema for provider-side structured output (derived from the constants
+# above so it cannot drift from `validate_extraction`, which stays authoritative)
+# --------------------------------------------------------------------------- #
+def extraction_json_schema() -> dict:
+    nullable_text = {"type": ["string", "null"], "maxLength": MAX_TEXT_LEN}
+    return {
+        "type": "object",
+        "properties": {
+            "claimed_authority": nullable_text,
+            "requested_action": nullable_text,
+            "payment_amount": {"type": ["integer", "null"], "minimum": 1, "maximum": MAX_AMOUNT},
+            "currency": {"type": ["string", "null"], "pattern": "^[A-Z]{3}$"},
+            "beneficiary": nullable_text,
+            "urgency_level": {"type": "string", "enum": list(URGENCY_LEVELS)},
+            "secrecy_indicator": {"type": "boolean"},
+            "organization": nullable_text,
+            "deadline": nullable_text,
+            "financial_intent": {"type": "string", "enum": list(FINANCIAL_INTENTS)},
+            "extracted_entities": {
+                "type": "array",
+                "maxItems": MAX_ENTITIES,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "enum": list(ENTITY_TYPES)},
+                        "value": {"type": "string", "maxLength": MAX_TEXT_LEN},
+                    },
+                    "required": ["type", "value"],
+                    "additionalProperties": False,
+                },
+            },
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+        "required": list(EXTRACTION_KEYS),
+        "additionalProperties": False,
+    }

@@ -16,7 +16,7 @@ try:
 except ImportError:  # pragma: no cover
     HAVE_FASTAPI = False
 
-_ENV_KEYS = ("TRUSTBREAK_DB_PATH", "TRUSTBREAK_SEED_DEMO", "TRUSTBREAK_AI_MODE", "ANTHROPIC_API_KEY")
+_ENV_KEYS = ("TRUSTBREAK_DB_PATH", "TRUSTBREAK_SEED_DEMO", "TRUSTBREAK_AI_MODE", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "TRUSTBREAK_AI_PROVIDER")
 
 
 @unittest.skipUnless(HAVE_FASTAPI, "fastapi/httpx not installed")
@@ -28,6 +28,8 @@ class AnalyzeMessageApiTests(unittest.TestCase):
         os.environ["TRUSTBREAK_SEED_DEMO"] = "1"
         os.environ["TRUSTBREAK_AI_MODE"] = "auto"
         os.environ.pop("ANTHROPIC_API_KEY", None)  # no key -> demo/mock mode
+        os.environ.pop("GEMINI_API_KEY", None)
+        os.environ.pop("TRUSTBREAK_AI_PROVIDER", None)
 
         from app.main import create_app
 
