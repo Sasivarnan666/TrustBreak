@@ -45,6 +45,15 @@ On TB-0001 click **Run risk assessment** in the **TrustBreak Risk Assessment** c
 5. **Run again** (optionally with `RBI_Statement.zip` chosen in Attachment Analysis) replaces the stored snapshot (100 points); the zip itself is never stored.
 6. Create a normal ₹1,00,000 Email payment to Vendor A from Arvind Rao and assess it: **LOW / PROCEED**.
 
+## Case review demo (v0.7.0)
+
+1. Open TB-0001 and click **Run risk assessment** (as above): **CRITICAL / HOLD PAYMENT**. The header now shows two badges, the red **CRITICAL** (TrustBreak's assessment) and the sky-blue **Case · Open** (analyst workflow). The Incidents list has separate **Risk** and **Case** columns; the Dashboard shows the risk KPIs plus **Open cases 1 / Verified 0 / Rejected 0**.
+2. Scroll to **Case review**: status Open, risk level CRITICAL, recommended action Hold payment. Click **Mark verified** with nothing typed: it asks for the analyst name and a reason (at least 10 characters).
+3. Enter "Security Analyst" and "Confirmed the request with the sender through the corporate directory number." and click **Mark verified** (or **Reject case** to show the other branch). The badge becomes **Case · Verified**, the controls are disabled with "This case is closed", and the **Case history** timeline shows CASE OPENED then ANALYST VERIFIED with the analyst and reason.
+4. **Refresh the page**: still **CRITICAL** + **Case · Verified**, the same assessment (score, signals, time, version) and the same history. The list and dashboard show CRITICAL / Verified and Verified cases 1.
+5. Say: "The risk assessment is what TrustBreak calculated and it never changes when a human decides. The decision is an audit record - an analyst said they verified the request. TrustBreak did not verify, approve or block any payment."
+6. Optional: `curl -X POST .../api/incidents/1/decision` again returns `409 case_already_closed`.
+
 ## What to say about the placeholder
 
 "The pipeline is real - form to API to database to dashboard - but the original intake note is a stub, which is why it is no longer a status. The status now comes from the stored, explainable risk assessment."

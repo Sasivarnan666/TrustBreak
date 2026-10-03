@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { EmptyState, ErrorState, LoadingState } from "../components/States.jsx";
-import { RiskBadge, Tag } from "../components/StatusBadge.jsx";
+import { CaseBadge, RiskBadge, Tag } from "../components/StatusBadge.jsx";
 import { ButtonLink, Card, PageHeader } from "../components/ui.jsx";
 import { useAsync } from "../hooks/useAsync.js";
 import { formatDateTime, formatINR } from "../lib/format.js";
@@ -22,14 +22,18 @@ function channelCounts(incidents) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-/** Pure view: everything it needs arrives as props. `summary` holds counts of PERSISTED risk assessments. */
-export function DashboardView({ incidents, total, summary }) {
+/** Pure view: everything it needs arrives as props. `summary` holds counts of PERSISTED risk assessments;
+ *  `caseSummary` holds counts of PERSISTED analyst workflow status (omitted -> the case row is not shown, never faked). */
+export function DashboardView({ incidents, total, summary, caseSummary }) {
   const counts = summary ?? { total, critical: 0, high: 0, medium: 0, low: 0, assessed: 0, not_assessed: total };
   const channels = channelCounts(incidents);
   const maxChannel = Math.max(...channels.map(([, n]) => n), 1);
 
   return (
     <>
+      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+        Risk · TrustBreak assessment
+      </h2>
       <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <Kpi label="Total incidents" value={counts.total} hint="All recorded requests" />
         <Kpi label="Critical" value={counts.critical} hint="Hold payment recommended" />
@@ -38,6 +42,19 @@ export function DashboardView({ incidents, total, summary }) {
         <Kpi label="Low" value={counts.low} hint="Proceed" />
         <Kpi label="Not assessed" value={counts.not_assessed} hint="No risk assessment run yet" />
       </div>
+
+      {caseSummary && (
+        <section aria-label="Case workflow" className="mt-6" data-testid="case-kpis">
+          <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+            Case workflow · analyst review
+          </h2>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Kpi label="Open cases" value={caseSummary.open} hint="Awaiting analyst review" />
+            <Kpi label="Verified cases" value={caseSummary.verified} hint="Analyst verified the request" />
+            <Kpi label="Rejected cases" value={caseSummary.rejected} hint="Analyst rejected the case" />
+          </div>
+        </section>
+      )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <Card
@@ -65,7 +82,10 @@ export function DashboardView({ incidents, total, summary }) {
                     <p className="text-sm font-semibold tabular-nums text-slate-900">{formatINR(incident.amount)}</p>
                     {incident.beneficiary_is_new && <Tag tone="amber">New beneficiary</Tag>}
                   </div>
-                  <RiskBadge level={incident.risk_level} />
+                  <div className="flex flex-col items-end gap-1">
+                    <RiskBadge level={incident.risk_level} />
+                    <CaseBadge status={incident.workflow_status} />
+                  </div>
                 </Link>
               </li>
             ))}
@@ -96,7 +116,8 @@ export function DashboardView({ incidents, total, summary }) {
             </div>
             <p className="mt-2 text-sm leading-relaxed text-slate-600">
               Counts above come from stored TrustBreak risk assessments only. Incidents without one are “Not assessed”.
-              Assessments are decision support, not proof of fraud, and no payment is blocked.
+              Assessments are decision support, not proof of fraud, and no payment is blocked. Case counts are analyst
+              review records only; they never change a risk assessment.
             </p>
           </Card>
         </div>
@@ -108,8 +129,12 @@ export function DashboardView({ incidents, total, summary }) {
 export default function Dashboard() {
   const { data, error, loading, reload } = useAsync(
     async (signal) => {
-      const [list, summary] = await Promise.all([api.listIncidents({ limit: 500 }, signal), api.riskSummary(signal)]);
-      return { ...list, summary: summary.data };
+      const [list, summary, cases] = await Promise.all([
+        api.listIncidents({ limit: 500 }, signal),
+        api.riskSummary(signal),
+        api.caseSummary(signal),
+      ]);
+      return { ...list, summary: summary.data, caseSummary: cases.data };
     },
     [],
   );
@@ -131,7 +156,7 @@ export default function Dashboard() {
           action={<ButtonLink to="/incidents/new">Create the first incident</ButtonLink>}
         />
       )}
-      {data && data.data.length > 0 && <DashboardView incidents={data.data} total={data.meta.total} summary={data.summary} />}
+      {data && data.data.length > 0 && <DashboardView incidents={data.data} total={data.meta.total} summary={data.summary} caseSummary={data.caseSummary} />}
     </>
   );
 }

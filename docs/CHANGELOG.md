@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0 - 2026-10-03 - Case workflow & analyst decision audit
+
+### Added
+- Human review after the risk assessment: workflow status `OPEN` (initial) / `VERIFIED` / `REJECTED`, kept separate from the risk level. `CRITICAL + OPEN` and `CRITICAL + VERIFIED` are both valid; the risk assessment is never read or changed by a decision.
+- `case_actions` table (existing startup-schema convention, no migration framework): append-only audit rows (`incident_id, previous_status, new_status, decision, reason, analyst_name, created_at`) with CHECK constraints, a `BEFORE UPDATE` abort trigger and partial unique indexes (one decision and one `CASE_OPENED` per incident). Current status = latest row's `new_status`. Every new incident gets a `CASE_OPENED` row in the same transaction; older incidents are backfilled at startup (idempotent).
+- `POST /api/incidents/{id}/decision` `{decision: VERIFIED|REJECTED, reason (10-1000, trimmed), analyst_name (2-80, trimmed)}`. Transition rules `OPEN -> VERIFIED|REJECTED` only; a closed case answers `409 case_already_closed`. Uses `BEGIN IMMEDIATE`; failure rolls back.
+- `GET /api/incidents/{id}` adds `workflow_status`, `workflow_status_label`, `case_history`. `GET /api/incidents` rows add `workflow_status(_label)`. `GET /api/incidents/case-summary` returns `{total, open, verified, rejected}`.
+- Layering `router -> services/case_workflow.py -> case_repository.py -> SQLite`; the risk engine does not import the workflow (AST-tested). `case_repository.py` and `case_workflow.py` existed unwired in the 0.6.0 archive and were completed.
+- Frontend: Case review card (decision form, validation, feedback, disabled when closed), Case history timeline, Risk + Case badges on the detail header, a Case column in the incident list, Open / Verified / Rejected KPIs on the dashboard (risk KPIs kept).
+- Tests: 58 new (28 DB/service, 30 HTTP) - 274 total.
+
+### Notes
+- A decision is an audit record, not a payment action. Nothing is approved, rejected, blocked, cancelled or executed, and the UI says "Analyst verified the request" / "Analyst rejected the case", never "TrustBreak verified".
+- No authentication: `analyst_name` is free text. No reopening, comments or edits.
+- Verification caveat: in the authoring sandbox FastAPI/httpx and Vite could not be installed (403), so the 30 HTTP tests and `npm run build` still need to be run on a networked machine. See PROJECT_STATE.
+
 ## 0.6.0 - 2026-10-03 - Persisted risk assessment & real incident status
 
 ### Added

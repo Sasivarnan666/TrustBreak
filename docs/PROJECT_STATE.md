@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-10-03 · Version 0.6.0 (foundation + AI message extraction + behaviour baseline + safe attachment analysis + risk correlation engine + **persisted risk assessment & real incident status**) · 216/216 backend tests passing, frontend build passing_
+_Last updated: 2026-10-03 · Version 0.7.0 (… + persisted risk assessment & real incident status + **case workflow & analyst decision audit**) · backend: 274 tests, 190 passed + 84 skipped in the authoring sandbox (no FastAPI there; the 84 HTTP tests must be run on a networked machine, see the 0.7.0 section) · frontend: compile + server-render checks passed, `npm run build` not run there_
 
 ## What was implemented
 
@@ -176,6 +176,63 @@ No execution, no extraction, no member reads, no file writes by the analyzer, no
 - No macro/script/URL inspection inside documents, no hashing or threat intelligence, no deceptive-Unicode (RTL override) or hidden-file checks (future work).
 - The keyword list for "document-looking" names is small and English-only; the file must be re-uploaded for each analysis (nothing is stored); results are not persisted.
 - Severity is a heuristic ordering of structural indicators, not a likelihood of malice.
+
+## Feature added in 0.7.0: Case workflow & analyst decision audit (COMPLETED)
+
+A human review step now follows TrustBreak's risk assessment. An analyst records **VERIFIED** or **REJECTED** with a reason; every decision is an immutable audit row. **This is a workflow/audit record only: no payment is ever approved, rejected, blocked, cancelled or executed, and the risk assessment is never modified.**
+
+Flow: `risk assessment (immutable evidence of what TrustBreak calculated) -> case review (OPEN) -> analyst decision -> VERIFIED | REJECTED`. Backend layering: `router -> services/case_workflow.py -> case_repository.py -> SQLite`. The risk engine does not import the workflow (AST-tested).
+
+### Workflow status vs risk level
+| Concept | Values | Who/what sets it | Changes? |
+|---|---|---|---|
+| Risk level (v0.6.0) | LOW / MEDIUM / HIGH / CRITICAL (+ Not assessed) | TrustBreak's deterministic engine | Only by re-running the assessment |
+| Workflow (case) status (v0.7.0) | OPEN / VERIFIED / REJECTED | A human analyst's recorded decision | Only OPEN -> VERIFIED or OPEN -> REJECTED |
+
+`CRITICAL + OPEN` and `CRITICAL + VERIFIED` are both valid. Workflow status is never derived from the risk level. "Verified" means an analyst recorded that the request was independently verified (it does not mean the system proved anything safe); "Rejected" means an analyst declined the case (it does not mean TrustBreak blocked a payment).
+
+### Persistence design
+- New table `case_actions` (created by the existing `CREATE TABLE IF NOT EXISTS` startup schema; no migration framework): `id, incident_id (FK, ON DELETE CASCADE), previous_status, new_status, decision, reason, analyst_name, created_at (UTC ISO-8601 Z)`. CHECK constraints restrict statuses to OPEN / VERIFIED / REJECTED and `decision` to CASE_OPENED / VERIFIED / REJECTED.
+- **The current status is the `new_status` of the incident's latest `case_actions` row** (no rows = OPEN). It is deliberately not a second column on `incidents`, so status and audit trail cannot drift apart. `risk_assessments` and `incidents` are not modified.
+- Every new incident gets a `CASE_OPENED` row in the same transaction as the incident insert. At startup, incidents that predate 0.7.0 get a `CASE_OPENED` row dated at their creation (idempotent backfill).
+- Immutability: a `BEFORE UPDATE` trigger aborts any update of a `case_actions` row; partial unique indexes allow at most one analyst decision and one `CASE_OPENED` row per incident (this also settles races).
+- `record_decision` takes the write lock (`BEGIN IMMEDIATE`), checks the incident, reads the current status, validates the transition, appends the audit row and commits; any failure rolls back. Nothing else is stored (no credentials, bank or payment data).
+
+### Transition rules
+`OPEN -> VERIFIED` and `OPEN -> REJECTED` only. `VERIFIED` and `REJECTED` have no exits (no reopening in 0.7.0), so a second decision, including the same one repeated, is `409 case_already_closed` and leaves no trace.
+
+### API
+- `POST /api/incidents/{id}/decision` body `{decision: "VERIFIED"|"REJECTED", reason, analyst_name}` (extra fields rejected). `reason`: trimmed, 10-1000 characters. `analyst_name`: trimmed, 2-80 characters. Returns `{incident_id, reference, workflow_status, workflow_status_label, case_history[]}`.
+- Errors (existing envelope): `validation_error` 422 (invalid/missing decision, missing/blank/short/long reason or analyst, malformed JSON, unknown fields, bad id), `not_found` 404, `case_already_closed` 409, `method_not_allowed` 405.
+- `GET /api/incidents/{id}` adds `workflow_status`, `workflow_status_label`, `case_history[]` (`previous_status, new_status, new_status_label, decision, decision_label, reason, analyst_name, created_at`, oldest first; no row ids). `GET /api/incidents` rows add `workflow_status`, `workflow_status_label` (one subquery, no N+1).
+- `GET /api/incidents/case-summary` (registered before `/{incident_id}`): `{total, open, verified, rejected}` from persisted audit rows.
+
+### Frontend changes
+- Incident detail: **Case review** card after the risk card (case status, TrustBreak risk level, recommended action, analyst-name and reason fields, **Mark verified** / **Reject case**, client validation mirroring the server, success/error feedback, controls disabled once closed, a 409 re-reads the persisted state) and a chronological **Case history** timeline. The header shows a Risk badge and a pill-shaped "Case · ..." badge side by side.
+- Incident list: separate **Risk** and **Case** columns. Dashboard: existing risk KPIs kept; new **Open / Verified / Rejected cases** row (hidden, never faked, if the summary is missing); recent incidents show both badges.
+- Case colours (sky / teal / violet) avoid the red-amber-green risk scale on purpose. Wording always names the analyst and never says TrustBreak verified, approved or blocked anything.
+
+### Files added
+`backend/app/case_repository.py`, `backend/app/services/case_workflow.py` (both were present in the 0.6.0 archive as unwired, untested scaffolding; they are now wired, completed and tested), `backend/tests/test_case_workflow.py` (28 tests), `backend/tests/test_case_workflow_api.py` (30 tests), `frontend/src/components/CaseReviewCard.jsx`, `frontend/src/lib/caseWorkflow.js`.
+
+### Files modified
+`backend/app/{database,schemas,repository}.py`, `backend/app/routers/incidents.py`, `frontend/src/{api/client.js, components/StatusBadge.jsx, pages/IncidentDetail.jsx, pages/IncidentList.jsx, pages/Dashboard.jsx}`, and the six documents.
+
+### Verification of this feature
+| Check | Result |
+|---|---|
+| `python -m unittest discover -s tests -t . -v` in the authoring sandbox (FastAPI and httpx could not be installed: PyPI returned 403) | **274 run, 190 passed, 0 failed, 84 skipped.** The 84 skips are all HTTP-level tests that need FastAPI/httpx: the 54 from 0.6.0 plus the 30 new API tests. The 28 new DB/service tests ran and passed (including a 6-thread concurrent-decision race with exactly one winner). |
+| Expected on a machine with `pip install -r requirements-dev.txt` | 274 run, 0 skipped. **NOT yet confirmed: run it before the demo.** |
+| `npm run build` | **NOT run** (npm registry returned 403, so Vite could not be installed). Instead every `.jsx`/`.js` file compiled with esbuild, and the new/changed views were server-rendered with react-dom (router stubbed): open and closed Case review, list columns, dashboard KPIs (and no fabricated counts when the summary is absent), detail header. All checks passed. Run `npm run build` to confirm. |
+| Live server and real browser | **Not run** (no FastAPI/Vite here). The demo flow is covered by `DemoAcceptanceTests` in `test_case_workflow_api.py` (includes an app restart), which is among the skipped tests. Layout and click behaviour are unverified. |
+
+### Known limitations (0.7.0)
+- No authentication: `analyst_name` is a free-text label, not an identity, so the audit trail is only as trustworthy as the honour system. No roles or permissions.
+- No reopening, reassignment, comments or edits. A mistaken decision cannot be corrected in-app (rows are immutable by design).
+- Risk assessments are still a single latest snapshot. If the assessment is re-run after a decision, the stored evidence changes but the case status and audit rows do not, and the decision row does not record which assessment (version/time/level) the analyst reviewed.
+- Decisions have no effect outside TrustBreak (there is no payment system).
+- The list and dashboard are not paginated beyond the existing 500-row cap. Case history is not paginated.
+- All 0.6.0 limitations still apply. App/health version strings still read 0.1.0.
 
 ## Feature added in 0.6.0: Persisted risk assessment & real incident status (COMPLETED)
 

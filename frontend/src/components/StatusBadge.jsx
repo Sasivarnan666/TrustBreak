@@ -1,3 +1,4 @@
+import { caseStatusMeta } from "../lib/caseWorkflow.js";
 import { riskLevelMeta } from "../lib/risk.js";
 
 const TONES = {
@@ -19,6 +20,30 @@ export function RiskBadge({ level, size = "sm" }) {
       className={`inline-flex items-center gap-1.5 rounded-md font-semibold ring-1 ring-inset ${sizing} ${tone.badge}`}
     >
       <span className={`size-1.5 rounded-full ${tone.dot}`} aria-hidden="true" />
+      {meta.label}
+    </span>
+  );
+}
+
+const CASE_TONES = {
+  sky: "bg-sky-50 text-sky-900 ring-sky-600/30",
+  teal: "bg-teal-50 text-teal-900 ring-teal-600/30",
+  violet: "bg-violet-50 text-violet-900 ring-violet-600/30",
+  slate: "bg-slate-100 text-slate-700 ring-slate-500/20",
+};
+
+/** The human case workflow status. Pill-shaped with a "Case" prefix so it never reads as a risk level. */
+export function CaseBadge({ status, size = "sm" }) {
+  const meta = caseStatusMeta(status);
+  const sizing = size === "lg" ? "px-3 py-1.5 text-sm" : "px-2 py-0.5 text-xs";
+  return (
+    <span
+      data-testid="case-badge"
+      title={meta.meaning}
+      className={`inline-flex items-center gap-1 rounded-full font-semibold ring-1 ring-inset ${sizing} ${CASE_TONES[meta.tone] ?? CASE_TONES.slate}`}
+    >
+      <span className="font-medium opacity-70">Case</span>
+      <span aria-hidden="true">·</span>
       {meta.label}
     </span>
   );

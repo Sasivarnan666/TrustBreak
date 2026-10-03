@@ -54,8 +54,12 @@ export const api = {
   listIncidents: ({ limit = 500, offset = 0 } = {}, signal) =>
     request(`/api/incidents?limit=${limit}&offset=${offset}`, { signal }),
   riskSummary: (signal) => request("/api/incidents/risk-summary", { signal }),
+  caseSummary: (signal) => request("/api/incidents/case-summary", { signal }),
   getIncident: (id, signal) => request(`/api/incidents/${encodeURIComponent(id)}`, { signal }),
   createIncident: (payload) => request("/api/incidents", { method: "POST", body: payload }),
+  // Analyst decision: a workflow / audit record only. body = { decision: "VERIFIED"|"REJECTED", reason, analyst_name }.
+  recordDecision: (id, body) =>
+    request(`/api/incidents/${encodeURIComponent(id)}/decision`, { method: "POST", body }),
   analyzeMessage: (id, signal) =>
     request(`/api/incidents/${encodeURIComponent(id)}/analyze-message`, { method: "POST", signal }),
   analyzeBehaviour: (id, signal) =>

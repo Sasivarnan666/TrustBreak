@@ -49,9 +49,55 @@ class IncidentCreate(BaseModel):
         return self
 
 
+class CaseDecisionRequest(BaseModel):
+    """An analyst's recorded decision (v0.7.0). A workflow/audit record only: no payment is ever acted on."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["VERIFIED", "REJECTED"]
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=10, max_length=1000)]
+    analyst_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=80)]
+
+
 # --------------------------------------------------------------------------- #
 # Responses
 # --------------------------------------------------------------------------- #
+class CaseActionOut(BaseModel):
+    previous_status: Optional[str] = None
+    new_status: str
+    new_status_label: str
+    decision: str  # CASE_OPENED | VERIFIED | REJECTED
+    decision_label: str
+    reason: str
+    analyst_name: Optional[str] = None
+    created_at: str
+
+
+class CaseStateOut(BaseModel):
+    incident_id: int
+    reference: str
+    workflow_status: Literal["OPEN", "VERIFIED", "REJECTED"]
+    workflow_status_label: str
+    case_history: list[CaseActionOut]
+
+
+class CaseDecisionResponse(BaseModel):
+    success: bool = True
+    data: CaseStateOut
+
+
+class CaseSummaryOut(BaseModel):
+    total: int
+    open: int
+    verified: int
+    rejected: int
+
+
+class CaseSummaryResponse(BaseModel):
+    success: bool = True
+    data: CaseSummaryOut
+
+
 class Sender(BaseModel):
     name: str
     role: str
@@ -101,6 +147,10 @@ class Incident(BaseModel):
     risk_assessment: Optional["StoredRiskAssessmentOut"] = None
     incident_status: str = "not_assessed"  # not_assessed | proceed | verify | hold_payment
     incident_status_label: str = "Not assessed"
+    # v0.7.0: human case workflow, separate from (and never derived from) the risk assessment above.
+    workflow_status: Literal["OPEN", "VERIFIED", "REJECTED"] = "OPEN"
+    workflow_status_label: str = "Open"
+    case_history: list["CaseActionOut"] = []
 
 
 class IncidentSummary(BaseModel):
@@ -127,6 +177,9 @@ class IncidentSummary(BaseModel):
     recommended_action_label: Optional[str] = None
     trust_break_detected: bool = False
     assessed_at: Optional[str] = None
+    # v0.7.0: current human case workflow status (separate concept from risk_level)
+    workflow_status: Literal["OPEN", "VERIFIED", "REJECTED"] = "OPEN"
+    workflow_status_label: str = "Open"
 
 
 class IncidentResponse(BaseModel):

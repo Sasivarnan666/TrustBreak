@@ -2,7 +2,7 @@
 
 AI-assisted **trusted-channel financial fraud defense**. Instead of only asking *"is this sender a scammer?"*, TrustBreak checks whether a financial request is **consistent** with the sender's identity, communication channel, payment details, attachment characteristics and historical behaviour.
 
-> **Status: hackathon prototype (v0.6.0).** Incidents can be created, stored and viewed end to end. A deterministic, explainable risk assessment (message + behaviour + attachment evidence) can be run per incident; the latest result is **saved with the incident** and drives its status in the detail page, list and dashboard. It is decision support, not proof of fraud, and nothing is blocked. Not a production banking system. All demo data is synthetic.
+> **Status: hackathon prototype (v0.7.0).** Incidents can be created, stored and viewed end to end. A deterministic, explainable risk assessment (message + behaviour + attachment evidence) can be run per incident; the latest result is **saved with the incident** and drives its status in the detail page, list and dashboard. A human analyst can then review the recommendation and record a **VERIFIED** or **REJECTED** decision with a reason, kept as an immutable audit trail (v0.7.0); that decision never changes the risk assessment. It is decision support, not proof of fraud, and nothing is blocked or paid. Not a production banking system. All demo data is synthetic.
 
 ## Stack
 
@@ -72,6 +72,8 @@ All responses share one envelope.
 | `POST` | `/api/incidents/{id}/analyze-behaviour` | Compare the request with the sender's synthetic behaviour profile (amount / beneficiary / channel signals; no fraud decision) |
 | `POST` | `/api/incidents/{id}/analyze-risk` | Correlate message, behaviour and (optional multipart `file`) attachment evidence into heuristic risk points, a level and a recommended action, then **save it as the incident's latest assessment** (`persisted: false` and not saved if message analysis was unavailable); prototype, not proof of fraud, blocks nothing. Attachment bytes are never stored |
 | `GET` | `/api/incidents/risk-summary` | Counts of incidents per persisted risk level (critical / high / medium / low) and not assessed |
+| `POST` | `/api/incidents/{id}/decision` | Record an analyst decision `{decision: VERIFIED\|REJECTED, reason, analyst_name}` for an OPEN case; appends an immutable audit row. Workflow record only: never changes the risk assessment and never touches a payment. `409 case_already_closed` if already decided |
+| `GET` | `/api/incidents/case-summary` | Counts of cases per workflow status (open / verified / rejected) |
 | `GET` | `/api/health` | Liveness check |
 
 ```jsonc
@@ -81,7 +83,7 @@ All responses share one envelope.
 { "success": false, "error": { "code": "validation_error", "message": "...", "details": [{ "field": "amount", "message": "..." }] } }
 ```
 
-Error codes: `validation_error` (422), `not_found` (404), `method_not_allowed` (405), `internal_error` (500), plus `ai_not_configured` (503), `ai_unavailable` / `ai_invalid_response` (502) from the message-analysis endpoint in `TRUSTBREAK_AI_MODE=ai`.
+Error codes: `validation_error` (422), `not_found` (404), `case_already_closed` (409), `method_not_allowed` (405), `internal_error` (500), plus `ai_not_configured` (503), `ai_unavailable` / `ai_invalid_response` (502) from the message-analysis endpoint in `TRUSTBREAK_AI_MODE=ai`.
 
 Try it from the command line:
 

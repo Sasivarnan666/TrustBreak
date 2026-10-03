@@ -15,7 +15,8 @@ from .schemas import (
     Payment,
     Sender,
 )
-from . import risk_repository
+from . import case_repository, risk_repository
+from .services import case_workflow
 from .services.analysis import analyze_incident
 from .services.risk_correlation.incident_status import NOT_ASSESSED, label_for_status
 
@@ -28,8 +29,13 @@ def _reference(incident_id: int) -> str:
     return f"TB-{incident_id:04d}"
 
 
+def reference_for(incident_id: int) -> str:
+    return _reference(incident_id)
+
+
 def create_incident(conn: sqlite3.Connection, payload: IncidentCreate) -> Incident:
     analysis = analyze_incident(payload)
+    created_at = _now()
     title = f"Payment request from {payload.sender_name} via {payload.channel}"
     with conn:  # commits on success, rolls back on error
         cursor = conn.execute(
@@ -45,7 +51,7 @@ def create_incident(conn: sqlite3.Connection, payload: IncidentCreate) -> Incide
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'INR', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                _now(),
+                created_at,
                 title,
                 payload.sender_name,
                 payload.sender_role,
@@ -67,6 +73,7 @@ def create_incident(conn: sqlite3.Connection, payload: IncidentCreate) -> Incide
             ),
         )
         new_id = cursor.lastrowid
+        case_workflow.open_case(conn, new_id, created_at)  # same transaction: no incident without a case
     created = get_incident(conn, new_id)
     assert created is not None  # just inserted
     return created
@@ -82,17 +89,24 @@ def get_incident(conn: sqlite3.Connection, incident_id: int) -> Optional[Inciden
         incident.risk_assessment = assessment
         incident.incident_status = assessment.incident_status
         incident.incident_status_label = assessment.incident_status_label
+    # Workflow state lives in its own table; the assessment above is left exactly as stored.
+    history = case_workflow.case_history(conn, incident_id)
+    incident.case_history = history
+    status = history[-1].new_status if history else case_workflow.OPEN
+    incident.workflow_status = status
+    incident.workflow_status_label = case_workflow.label_for_status(status)
     return incident
 
 
 def list_incidents(conn: sqlite3.Connection, limit: int = 100, offset: int = 0) -> list[IncidentSummary]:
     # One query: the latest assessment is a single row per incident, so a LEFT JOIN avoids N+1.
     rows = conn.execute(
-        """
+        f"""
         SELECT i.*,
                r.risk_level AS r_risk_level, r.risk_score AS r_risk_score,
                r.recommended_action AS r_recommended_action, r.incident_status AS r_incident_status,
-               r.trust_break_detected AS r_trust_break, r.assessed_at AS r_assessed_at
+               r.trust_break_detected AS r_trust_break, r.assessed_at AS r_assessed_at,
+               {case_repository.STATUS_SQL} AS workflow_status
         FROM incidents i
         LEFT JOIN risk_assessments r ON r.incident_id = i.id
         ORDER BY i.id DESC LIMIT ? OFFSET ?
@@ -118,6 +132,8 @@ def _row_to_summary(row: sqlite3.Row) -> IncidentSummary:
         recommended_action_label=risk_repository._ACTION_LABELS.get(action) if assessed else None,
         trust_break_detected=bool(row["r_trust_break"]) if assessed else False,
         assessed_at=row["r_assessed_at"],
+        workflow_status=row["workflow_status"],
+        workflow_status_label=case_workflow.label_for_status(row["workflow_status"]),
         id=row["id"],
         reference=_reference(row["id"]),
         created_at=row["created_at"],

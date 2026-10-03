@@ -9,6 +9,9 @@ from ..database import get_db
 from ..errors import AppError, NotFoundError
 from ..schemas import (
     AttachmentAnalysisOut,
+    CaseDecisionRequest,
+    CaseDecisionResponse,
+    CaseSummaryResponse,
     AttachmentAnalysisResponse,
     BehaviourAnalysisOut,
     BehaviourAnalysisResponse,
@@ -23,6 +26,7 @@ from ..schemas import (
     RiskSummaryResponse,
     StoredRiskAssessmentOut,
 )
+from ..services import case_workflow
 from ..services.attachment_analysis import AttachmentError, analyze_attachment
 from ..services.attachment_analysis import config as attachment_config
 from ..services.behaviour import analyze_incident_behaviour
@@ -61,6 +65,12 @@ def risk_summary(db: sqlite3.Connection = Depends(get_db)):
     return RiskSummaryResponse(data=RiskSummaryOut(**risk_repository.risk_summary(db)))
 
 
+@router.get("/case-summary", response_model=CaseSummaryResponse)
+def case_summary(db: sqlite3.Connection = Depends(get_db)):
+    """Incident counts per current human workflow status (open / verified / rejected), from persisted audit rows."""
+    return CaseSummaryResponse(data=case_workflow.case_summary(db))
+
+
 @router.get("/{incident_id}", response_model=IncidentResponse)
 def get_incident(
     incident_id: int = Path(ge=1, le=SQLITE_MAX_INT),
@@ -70,6 +80,22 @@ def get_incident(
     if incident is None:
         raise NotFoundError(f"Incident {incident_id} was not found.")
     return IncidentResponse(data=incident)
+
+
+@router.post("/{incident_id}/decision", response_model=CaseDecisionResponse)
+def record_case_decision(
+    payload: CaseDecisionRequest,
+    incident_id: int = Path(ge=1, le=SQLITE_MAX_INT),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Record an analyst's VERIFIED / REJECTED decision for the case (workflow + audit record only).
+
+    Appends one immutable audit row and moves the case OPEN -> VERIFIED|REJECTED. It never reads or changes the
+    risk assessment, and it never approves, blocks, cancels or executes any payment. A closed case answers
+    409 case_already_closed.
+    """
+    case_workflow.record_decision(db, incident_id, payload.decision, payload.reason, payload.analyst_name)
+    return CaseDecisionResponse(data=case_workflow.case_state(db, incident_id, repository.reference_for(incident_id)))
 
 
 _EXTRACTION_STATUS = {"ai_not_configured": 503, "ai_unavailable": 502, "ai_invalid_response": 502}

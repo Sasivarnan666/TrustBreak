@@ -3,10 +3,11 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client.js";
 import AttachmentAnalysisCard from "../components/AttachmentAnalysisCard.jsx";
 import BehaviourAnalysisCard from "../components/BehaviourAnalysisCard.jsx";
+import CaseReviewCard from "../components/CaseReviewCard.jsx";
 import MessageAnalysisCard from "../components/MessageAnalysisCard.jsx";
 import RiskAssessmentCard from "../components/RiskAssessmentCard.jsx";
 import { ErrorState, LoadingState } from "../components/States.jsx";
-import { RiskBadge, Tag } from "../components/StatusBadge.jsx";
+import { CaseBadge, RiskBadge, Tag } from "../components/StatusBadge.jsx";
 import { ButtonLink, Card, DataRow } from "../components/ui.jsx";
 import { useAsync } from "../hooks/useAsync.js";
 import { formatBytes, formatDateTime, formatINR } from "../lib/format.js";
@@ -30,6 +31,17 @@ export function IncidentView({ incident }) {
   const [assessment, setAssessment] = useState(incident.risk_assessment ?? null);
   const action = recommendedActionMeta(assessment?.recommended_action);
   const [attachmentFile, setAttachmentFile] = useState(null); // shared by Attachment Analysis and the risk assessment
+  // The human case workflow is separate state from the risk assessment: a decision never touches `assessment`.
+  const [caseState, setCaseState] = useState({
+    workflow_status: incident.workflow_status,
+    case_history: incident.case_history ?? [],
+  });
+  // After a conflict (e.g. the case was closed elsewhere) re-read the persisted workflow state in place.
+  const syncCase = () =>
+    api
+      .getIncident(incident.id)
+      .then((res) => setCaseState({ workflow_status: res.data.workflow_status, case_history: res.data.case_history }))
+      .catch(() => {});
 
   return (
     <>
@@ -49,10 +61,14 @@ export function IncidentView({ incident }) {
           </p>
         </div>
         <div className="flex flex-col items-start gap-1 sm:items-end" data-testid="incident-status">
-          <RiskBadge level={assessment?.risk_level} size="lg" />
+          <div className="flex flex-wrap items-center gap-2">
+            <RiskBadge level={assessment?.risk_level} size="lg" />
+            <CaseBadge status={caseState.workflow_status} size="lg" />
+          </div>
           <span className="text-xs font-medium text-slate-600">
             {assessment ? `${action?.icon ?? ""} ${assessment.recommended_action_label}` : "No risk assessment yet"}
           </span>
+          <span className="text-[11px] text-slate-500">Risk = TrustBreak assessment · Case = analyst review</span>
         </div>
       </header>
 
@@ -78,6 +94,18 @@ export function IncidentView({ incident }) {
           hasAttachment={Boolean(attachment)}
           assessment={assessment}
           onAssessed={setAssessment}
+        />
+      </div>
+
+      <div className="mt-6">
+        <CaseReviewCard
+          incidentId={incident.id}
+          assessment={assessment}
+          caseState={caseState}
+          onCaseChange={(state) =>
+            setCaseState({ workflow_status: state.workflow_status, case_history: state.case_history })
+          }
+          onReload={syncCase}
         />
       </div>
 

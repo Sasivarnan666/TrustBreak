@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { EmptyState, ErrorState, LoadingState } from "../components/States.jsx";
-import { RiskBadge, Tag } from "../components/StatusBadge.jsx";
+import { CaseBadge, RiskBadge, Tag } from "../components/StatusBadge.jsx";
 import { ButtonLink, PageHeader } from "../components/ui.jsx";
 import { useAsync } from "../hooks/useAsync.js";
 import { formatDateTime, formatINR } from "../lib/format.js";
@@ -40,7 +40,7 @@ export function IncidentTable({ incidents }) {
         <p className="px-5 py-10 text-center text-sm text-slate-600">No incidents match “{query}”.</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[64rem] text-left text-sm">
+          <table className="w-full min-w-[70rem] text-left text-sm">
             <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
               <tr>
                 <th className="px-5 py-3">Reference</th>
@@ -50,6 +50,7 @@ export function IncidentTable({ incidents }) {
                 <th className="px-3 py-3">Beneficiary</th>
                 <th className="px-3 py-3">Attachment</th>
                 <th className="px-3 py-3">Risk</th>
+                <th className="px-3 py-3">Case</th>
                 <th className="px-3 py-3">Recommended action</th>
                 <th className="px-5 py-3">Created</th>
               </tr>
@@ -77,6 +78,9 @@ export function IncidentTable({ incidents }) {
                   <td className="px-3 py-3.5">
                     <RiskBadge level={i.risk_level} />
                     {i.trust_break_detected && <p className="mt-1 text-[11px] font-semibold text-red-700">Trust break</p>}
+                  </td>
+                  <td className="px-3 py-3.5" data-testid="row-case">
+                    <CaseBadge status={i.workflow_status} />
                   </td>
                   <td className="px-3 py-3.5 text-slate-700" data-testid="row-action">
                     {i.recommended_action ? (

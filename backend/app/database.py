@@ -7,6 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Iterator, Optional
 
+from . import case_repository
 from .config import get_db_path
 
 SCHEMA = """
@@ -65,6 +66,31 @@ CREATE TABLE IF NOT EXISTS risk_assessments (
     scoring_method               TEXT    NOT NULL,
     disclaimer                   TEXT    NOT NULL
 );
+
+-- v0.7.0: append-only human case workflow / audit trail. The CURRENT workflow status of an incident is the
+-- new_status of its latest row (no rows = OPEN). Risk assessments are never touched by this table.
+CREATE TABLE IF NOT EXISTS case_actions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    incident_id     INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    previous_status TEXT    CHECK (previous_status IS NULL OR previous_status IN ('OPEN', 'VERIFIED', 'REJECTED')),
+    new_status      TEXT    NOT NULL CHECK (new_status IN ('OPEN', 'VERIFIED', 'REJECTED')),
+    decision        TEXT    NOT NULL CHECK (decision IN ('CASE_OPENED', 'VERIFIED', 'REJECTED')),
+    reason          TEXT    NOT NULL,
+    analyst_name    TEXT,
+    created_at      TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_case_actions_incident ON case_actions (incident_id, id);
+-- At most one analyst decision per case (no reopening in v0.7.0) and one CASE_OPENED row; also closes races.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_case_actions_one_decision
+    ON case_actions (incident_id) WHERE decision IN ('VERIFIED', 'REJECTED');
+CREATE UNIQUE INDEX IF NOT EXISTS uq_case_actions_one_opened
+    ON case_actions (incident_id) WHERE decision = 'CASE_OPENED';
+-- Audit rows are immutable: any UPDATE is refused.
+CREATE TRIGGER IF NOT EXISTS trg_case_actions_no_update
+BEFORE UPDATE ON case_actions
+BEGIN
+    SELECT RAISE(ABORT, 'case_actions rows are immutable');
+END;
 """
 
 
@@ -83,6 +109,7 @@ def init_db(path: Optional[Path] = None) -> None:
     conn = connect(path)
     try:
         conn.executescript(SCHEMA)
+        case_repository.backfill_opened(conn)  # incidents created before v0.7.0 get their CASE_OPENED row
         conn.commit()
     finally:
         conn.close()
