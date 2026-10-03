@@ -1,0 +1,57 @@
+/** Thin fetch wrapper. Every backend response uses the same JSON envelope:
+ *  success: { success: true,  data, meta? }
+ *  failure: { success: false, error: { code, message, details: [{ field, message }] } }
+ */
+
+export class ApiError extends Error {
+  constructor(code, message, status = 0, details = []) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.status = status;
+    this.details = details;
+  }
+}
+
+async function request(path, { method = "GET", body, signal } = {}) {
+  let response;
+  try {
+    response = await fetch(path, {
+      method,
+      signal,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (err) {
+    if (err?.name === "AbortError") throw err;
+    throw new ApiError(
+      "network_error",
+      "Cannot reach the TrustBreak API. Check that the backend is running on port 8000.",
+    );
+  }
+
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    /* non-JSON body (e.g. proxy error page) - handled below */
+  }
+
+  if (!response.ok || !payload || payload.success !== true) {
+    const error = payload?.error;
+    throw new ApiError(
+      error?.code ?? "http_error",
+      error?.message ?? `The server returned an unexpected response (HTTP ${response.status}).`,
+      response.status,
+      error?.details ?? [],
+    );
+  }
+  return payload;
+}
+
+export const api = {
+  listIncidents: ({ limit = 500, offset = 0 } = {}, signal) =>
+    request(`/api/incidents?limit=${limit}&offset=${offset}`, { signal }),
+  getIncident: (id, signal) => request(`/api/incidents/${encodeURIComponent(id)}`, { signal }),
+  createIncident: (payload) => request("/api/incidents", { method: "POST", body: payload }),
+};

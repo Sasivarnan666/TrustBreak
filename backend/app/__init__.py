@@ -1,0 +1,1 @@
+"""TrustBreak backend (FastAPI + SQLite)."""

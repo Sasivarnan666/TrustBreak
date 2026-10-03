@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+
+# local database (created at first backend start)
+data/*.db
+data/*.db-journal
