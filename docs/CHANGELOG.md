@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0 - 2026-10-03 - AI message entity & financial-intent extraction
+
+### Added
+- `backend/app/services/message_analysis/`: `analyze_message(message) -> MessageAnalysis` with strict schema validation (`schema.py`), prompt-injection-aware prompt (`prompt.py`), Anthropic client over stdlib `urllib` (`ai_provider.py`), deterministic demo extractor (`mock_extractor.py`) and the orchestrating service (`service.py`).
+- `POST /api/incidents/{id}/analyze-message` returning the validated extraction with its mode (`ai` / `mock` / `skipped`), notes and `is_final_decision: false`. Not persisted; no schema change.
+- Config: `ANTHROPIC_API_KEY`, `TRUSTBREAK_AI_MODE`, `TRUSTBREAK_AI_MODEL`, `TRUSTBREAK_AI_TIMEOUT_SECONDS`; `.env.example`.
+- Frontend: "AI Message Analysis" card on the incident detail page (on-demand, mode badge, "not a fraud decision" notice).
+- Tests: 25 service tests (run), 7 HTTP tests (written, need FastAPI).
+
+### Notes
+- Extraction only. No risk scoring, risk levels, blocking or other roadmap items were implemented; the incident's placeholder analysis is unchanged.
+- Without an API key the app runs in clearly labelled demo (rule-based) mode.
+
 ## 0.1.0 - 2026-10-03 - Foundation
 
 ### Added

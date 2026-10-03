@@ -6,13 +6,16 @@ from fastapi import APIRouter, Depends, Path, Query, status
 
 from .. import repository
 from ..database import get_db
-from ..errors import NotFoundError
+from ..errors import AppError, NotFoundError
 from ..schemas import (
     IncidentCreate,
     IncidentListMeta,
     IncidentListResponse,
     IncidentResponse,
+    MessageAnalysisOut,
+    MessageAnalysisResponse,
 )
+from ..services.message_analysis import ExtractionError, analyze_message
 
 router = APIRouter(prefix="/api/incidents", tags=["incidents"])
 
@@ -48,3 +51,26 @@ def get_incident(
     if incident is None:
         raise NotFoundError(f"Incident {incident_id} was not found.")
     return IncidentResponse(data=incident)
+
+
+_EXTRACTION_STATUS = {"ai_not_configured": 503, "ai_unavailable": 502, "ai_invalid_response": 502}
+
+
+@router.post("/{incident_id}/analyze-message", response_model=MessageAnalysisResponse)
+def analyze_incident_message(
+    incident_id: int = Path(ge=1, le=SQLITE_MAX_INT),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Extract entities and financial intent from the incident's message.
+
+    Extraction only - no risk scoring. The result is computed on demand and
+    not stored (no schema change).
+    """
+    incident = repository.get_incident(db, incident_id)
+    if incident is None:
+        raise NotFoundError(f"Incident {incident_id} was not found.")
+    try:
+        result = analyze_message(incident.message)
+    except ExtractionError as exc:
+        raise AppError(exc.code, exc.message, status_code=_EXTRACTION_STATUS.get(exc.code, 502))
+    return MessageAnalysisResponse(data=MessageAnalysisOut(**result.to_dict()))

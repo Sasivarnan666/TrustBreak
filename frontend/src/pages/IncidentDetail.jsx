@@ -1,5 +1,6 @@
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client.js";
+import MessageAnalysisCard from "../components/MessageAnalysisCard.jsx";
 import { ErrorState, LoadingState } from "../components/States.jsx";
 import { StatusBadge, Tag } from "../components/StatusBadge.jsx";
 import { ButtonLink, Card, DataRow } from "../components/ui.jsx";
@@ -77,6 +78,8 @@ export function IncidentView({ incident }) {
               {incident.message}
             </blockquote>
           </Card>
+
+          <MessageAnalysisCard incidentId={incident.id} />
 
           <Card title="Evidence" padded={false} aside={<span className="text-xs text-slate-500">{analysis.evidence.length} items</span>}>
             <table className="w-full text-left text-sm">

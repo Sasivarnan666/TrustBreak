@@ -28,3 +28,26 @@ def get_cors_origins() -> list[str]:
 def seed_enabled() -> bool:
     """Insert the synthetic demo incident on first start (set to 0 to disable)."""
     return os.environ.get("TRUSTBREAK_SEED_DEMO", "1") != "0"
+
+
+# ---- AI message analysis ----------------------------------------------------- #
+def get_ai_mode() -> str:
+    """auto (default): use AI when a key exists, else demo mock. ai: AI only. mock: demo only."""
+    mode = os.environ.get("TRUSTBREAK_AI_MODE", "auto").strip().lower()
+    return mode if mode in ("auto", "ai", "mock") else "auto"
+
+
+def get_ai_api_key():
+    return os.environ.get("ANTHROPIC_API_KEY", "").strip() or None
+
+
+def get_ai_model() -> str:
+    return os.environ.get("TRUSTBREAK_AI_MODEL", "").strip() or "claude-sonnet-5-5"
+
+
+def get_ai_timeout() -> float:
+    try:
+        value = float(os.environ.get("TRUSTBREAK_AI_TIMEOUT_SECONDS", "20"))
+    except ValueError:
+        return 20.0
+    return value if 1 <= value <= 120 else 20.0

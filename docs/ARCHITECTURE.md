@@ -11,6 +11,7 @@
    schemas.py             Pydantic: request validation + response shapes
    repository.py          SQL (stdlib sqlite3), row <-> model mapping
    services/analysis.py   PLACEHOLDER analysis (replaceable seam)
+   services/message_analysis/  message -> validated structured JSON (AI or labelled demo mock)
    errors.py + main.py    one JSON envelope for success and every failure
         │
         ▼
@@ -32,6 +33,26 @@ Frontend and backend share nothing except the REST contract below.
 | `seed.py` | Synthetic demo incident | |
 | `config.py` | Env-var settings, read at call time | |
 | `errors.py` | `AppError`, `error_body()` | |
+
+### Message analysis service (`services/message_analysis/`)
+
+```
+message ──> analyze_message() ──┬─ AI mode:   prompt.py -> ai_provider.py (Anthropic, stdlib urllib)
+ (untrusted)                    │                 reply -> parse_model_reply -> validate_extraction (strict)
+                                └─ mock mode: mock_extractor.py (regex rules, NOT AI) -> same validate_extraction
+                                          ▼
+                              MessageAnalysis { mode, model, extraction, notes, fallback_reason, is_final_decision=false }
+```
+
+| Module | Responsibility |
+|---|---|
+| `schema.py` | Dataclasses + `validate_extraction` (exact keys, enums, types, ranges). Stdlib only. |
+| `prompt.py` | System prompt (message = untrusted data) and per-request random-delimiter wrapping |
+| `ai_provider.py` | One HTTPS call to the Anthropic Messages API; raises `ProviderError`; never echoes secrets |
+| `mock_extractor.py` | Deterministic demo rules; output also passes `validate_extraction` |
+| `service.py` | Mode selection (`auto`/`ai`/`mock`), fallback policy, `ExtractionError` |
+
+Rules: nothing outside this package imports the provider or the prompt; the router calls only `analyze_message`; a future risk engine reads `MessageAnalysis.extraction` and has no LLM dependency. The core is stdlib-only (testable without FastAPI); the pydantic models in `schemas.py` (`MessageAnalysisOut`…) only shape the HTTP response. `POST /api/incidents/{id}/analyze-message` is computed on demand and not stored.
 
 ### The analysis seam
 
@@ -80,4 +101,4 @@ Pages that display data are split into a fetching component and a pure `*View` c
 
 ## Deliberate non-goals (this phase)
 
-No authentication, no real AI or detection, no behavioural history, no file upload/inspection, no external integrations (banking, WhatsApp), no payment processing, no migrations tooling.
+No authentication, no fraud detection or risk scoring (AI is used only for message field extraction), no behavioural history, no file upload/inspection, no external integrations (banking, WhatsApp), no payment processing, no migrations tooling.

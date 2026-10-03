@@ -132,3 +132,40 @@ class IncidentListResponse(BaseModel):
     success: bool = True
     data: list[IncidentSummary]
     meta: IncidentListMeta
+
+
+# --------------------------------------------------------------------------- #
+# AI message analysis (extraction only - not a risk score or fraud decision)
+# --------------------------------------------------------------------------- #
+class ExtractedEntityOut(BaseModel):
+    type: str
+    value: str
+
+
+class MessageExtractionOut(BaseModel):
+    claimed_authority: Optional[str] = None
+    requested_action: Optional[str] = None
+    payment_amount: Optional[int] = None
+    currency: Optional[str] = None
+    beneficiary: Optional[str] = None
+    urgency_level: str
+    secrecy_indicator: bool
+    organization: Optional[str] = None
+    deadline: Optional[str] = None
+    financial_intent: str
+    extracted_entities: list[ExtractedEntityOut]
+    confidence: float
+
+
+class MessageAnalysisOut(BaseModel):
+    mode: Literal["ai", "mock", "skipped"]  # "mock" = demo rules, NOT an AI model
+    model: Optional[str] = None
+    extraction: MessageExtractionOut
+    notes: list[str]
+    fallback_reason: Optional[str] = None
+    is_final_decision: bool = False  # always False: extraction only
+
+
+class MessageAnalysisResponse(BaseModel):
+    success: bool = True
+    data: MessageAnalysisOut

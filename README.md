@@ -55,6 +55,10 @@ npm run dev
 
 Open <http://localhost:5173>. You should see the dashboard with one incident (the demo scenario).
 
+## AI message analysis (optional)
+
+The incident detail page has an **AI Message Analysis** card (extracts authority, amount, beneficiary, urgency, secrecy, deadline and financial intent from the message; extraction only, not a fraud decision). It works with no setup in clearly labelled **demo mode** (rule-based, not AI). For real AI, copy `.env.example`, set `ANTHROPIC_API_KEY`, and export the variables before starting the backend (`set -a; source .env; set +a`). `TRUSTBREAK_AI_MODE=auto|ai|mock` controls fallback behaviour.
+
 ## API
 
 All responses share one envelope.
@@ -64,6 +68,7 @@ All responses share one envelope.
 | `POST` | `/api/incidents` | Create an incident (returns `201`) |
 | `GET` | `/api/incidents?limit=100&offset=0` | List incidents, newest first |
 | `GET` | `/api/incidents/{id}` | Incident detail |
+| `POST` | `/api/incidents/{id}/analyze-message` | Extract entities / financial intent from the incident's message (AI or labelled demo mode; no fraud decision) |
 | `GET` | `/api/health` | Liveness check |
 
 ```jsonc
@@ -73,7 +78,7 @@ All responses share one envelope.
 { "success": false, "error": { "code": "validation_error", "message": "...", "details": [{ "field": "amount", "message": "..." }] } }
 ```
 
-Error codes: `validation_error` (422), `not_found` (404), `method_not_allowed` (405), `internal_error` (500).
+Error codes: `validation_error` (422), `not_found` (404), `method_not_allowed` (405), `internal_error` (500), plus `ai_not_configured` (503), `ai_unavailable` / `ai_invalid_response` (502) from the message-analysis endpoint in `TRUSTBREAK_AI_MODE=ai`.
 
 Try it from the command line:
 

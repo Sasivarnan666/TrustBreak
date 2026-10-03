@@ -54,4 +54,6 @@ export const api = {
     request(`/api/incidents?limit=${limit}&offset=${offset}`, { signal }),
   getIncident: (id, signal) => request(`/api/incidents/${encodeURIComponent(id)}`, { signal }),
   createIncident: (payload) => request("/api/incidents", { method: "POST", body: payload }),
+  analyzeMessage: (id, signal) =>
+    request(`/api/incidents/${encodeURIComponent(id)}/analyze-message`, { method: "POST", signal }),
 };

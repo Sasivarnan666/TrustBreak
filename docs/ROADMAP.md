@@ -1,6 +1,6 @@
 # Roadmap
 
-Planned feature sequence. Each step is independent enough to ship on its own, and each builds on the `analyze_incident` seam. Nothing below step 0 is started.
+Planned feature sequence. Each step is independent enough to ship on its own, and each builds on the `analyze_incident` seam. Only step 0 and step 6a are built; everything else is not started.
 
 | # | Step | Outcome |
 |---|---|---|
@@ -10,7 +10,8 @@ Planned feature sequence. Each step is independent enough to ship on its own, an
 | 3 | **Attachment risk indicators (metadata level)** | Flags from name/type/size: archives, executable or double extensions, unexpected attachment for the request type. |
 | 4 | **Case workflow** | Statuses (open / verified / rejected), analyst notes, audit trail, approve/reject with reason. |
 | 5 | **Historical behaviour baseline** | Statistical baseline per sender and channel; deviation scoring. |
-| 6 | **AI-assisted message analysis** | LLM review of urgency, secrecy and pressure language, with explanations; clearly labelled as AI output and combined with the rule results. |
+| 6a | **AI message entity & financial-intent extraction** (v0.2.0) | **DONE.** Structured fields (authority, action, amount, beneficiary, urgency, secrecy, deadline, intent) extracted by AI with a labelled demo fallback. Extraction only; consumed by later steps via `analyze_message`. |
+| 6 | **AI-assisted message analysis** | LLM review of urgency, secrecy and pressure language, with explanations; clearly labelled as AI output and combined with the rule results. Not started beyond the extraction in 6a. |
 | 7 | **Attachment content analysis** | Sandboxed static inspection of uploaded files. |
 | 8 | **Ingestion and integrations** | Email / messaging ingestion, authentication and roles. |
 
