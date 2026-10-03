@@ -2,20 +2,30 @@
 
 import sqlite3
 
-from fastapi import APIRouter, Depends, Path, Query, status
+from fastapi import APIRouter, Depends, File, Path, Query, UploadFile, status
 
 from .. import repository
 from ..database import get_db
 from ..errors import AppError, NotFoundError
 from ..schemas import (
+    AttachmentAnalysisOut,
+    AttachmentAnalysisResponse,
+    BehaviourAnalysisOut,
+    BehaviourAnalysisResponse,
     IncidentCreate,
     IncidentListMeta,
     IncidentListResponse,
     IncidentResponse,
     MessageAnalysisOut,
     MessageAnalysisResponse,
+    RiskCorrelationOut,
+    RiskCorrelationResponse,
 )
+from ..services.attachment_analysis import AttachmentError, analyze_attachment
+from ..services.attachment_analysis import config as attachment_config
+from ..services.behaviour import analyze_incident_behaviour
 from ..services.message_analysis import ExtractionError, analyze_message
+from ..services.risk_correlation import assess_incident_risk
 
 router = APIRouter(prefix="/api/incidents", tags=["incidents"])
 
@@ -74,3 +84,92 @@ def analyze_incident_message(
     except ExtractionError as exc:
         raise AppError(exc.code, exc.message, status_code=_EXTRACTION_STATUS.get(exc.code, 502))
     return MessageAnalysisResponse(data=MessageAnalysisOut(**result.to_dict()))
+
+
+@router.post("/{incident_id}/analyze-behaviour", response_model=BehaviourAnalysisResponse)
+def analyze_incident_behaviour_endpoint(
+    incident_id: int = Path(ge=1, le=SQLITE_MAX_INT),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Compare the request with the sender's synthetic behaviour profile.
+
+    Deterministic anomaly signals only - no risk score or fraud verdict.
+    Computed on demand and not stored (no schema change).
+    """
+    incident = repository.get_incident(db, incident_id)
+    if incident is None:
+        raise NotFoundError(f"Incident {incident_id} was not found.")
+    result = analyze_incident_behaviour(
+        sender_name=incident.sender.name,
+        channel=incident.channel,
+        amount=incident.payment.amount,
+        beneficiary=incident.payment.beneficiary_name,
+    )
+    return BehaviourAnalysisResponse(data=BehaviourAnalysisOut(**result))
+
+
+@router.post("/{incident_id}/analyze-attachment", response_model=AttachmentAnalysisResponse)
+async def analyze_incident_attachment(
+    incident_id: int = Path(ge=1, le=SQLITE_MAX_INT),
+    file: UploadFile | None = File(default=None),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Statically inspect the uploaded copy of the incident's attachment.
+
+    The incident stores attachment metadata only, so the file is sent with this
+    request as multipart field `file`. It is analyzed in memory and discarded:
+    never executed, extracted or stored. Structural evidence only - no risk score.
+    """
+    incident = repository.get_incident(db, incident_id)
+    if incident is None:
+        raise NotFoundError(f"Incident {incident_id} was not found.")
+    if incident.attachment is None:
+        raise AppError("attachment_missing", "This incident has no attachment to analyze.", status_code=400)
+    if file is None:
+        raise AppError("attachment_missing", "No file was uploaded. Send the attachment as multipart field 'file'.",
+                       status_code=400)
+
+    limit = attachment_config.max_upload_bytes()
+    data = await file.read(limit + 1)  # bounded read: never buffers more than limit + 1 bytes
+    try:
+        result = analyze_attachment(file.filename or "", data, file.content_type)
+    except AttachmentError as exc:
+        raise AppError(exc.code, exc.message, status_code=exc.status_code)
+
+    if file.filename and incident.attachment.name and _clean_name(file.filename) != incident.attachment.name:
+        result["notes"].insert(0, "The uploaded file name differs from the attachment name recorded on the incident.")
+    return AttachmentAnalysisResponse(data=AttachmentAnalysisOut(**result))
+
+
+@router.post("/{incident_id}/analyze-risk", response_model=RiskCorrelationResponse)
+async def analyze_incident_risk(
+    incident_id: int = Path(ge=1, le=SQLITE_MAX_INT),
+    file: UploadFile | None = File(default=None),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Correlate message, behaviour and (optionally) attachment evidence.
+
+    Deterministic heuristic risk points - not a probability and not proof of
+    fraud. The incident stores attachment metadata only, so attachment evidence
+    is included only when the file is sent as optional multipart field `file`
+    (analyzed in memory, never executed, extracted or stored). The result is
+    computed on demand and not stored. Nothing is blocked or executed: the
+    response only recommends an action.
+    """
+    incident = repository.get_incident(db, incident_id)
+    if incident is None:
+        raise NotFoundError(f"Incident {incident_id} was not found.")
+
+    attachment_file = None
+    if file is not None:
+        data = await file.read(attachment_config.max_upload_bytes() + 1)  # bounded read
+        attachment_file = (file.filename or "", data, file.content_type)
+    try:
+        result = assess_incident_risk(incident, attachment_file)
+    except AttachmentError as exc:
+        raise AppError(exc.code, exc.message, status_code=exc.status_code)
+    return RiskCorrelationResponse(data=RiskCorrelationOut(**result.to_dict()))
+
+
+def _clean_name(name: str) -> str:
+    return name.replace("\\", "/").rsplit("/", 1)[-1]

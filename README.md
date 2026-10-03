@@ -69,6 +69,8 @@ All responses share one envelope.
 | `GET` | `/api/incidents?limit=100&offset=0` | List incidents, newest first |
 | `GET` | `/api/incidents/{id}` | Incident detail |
 | `POST` | `/api/incidents/{id}/analyze-message` | Extract entities / financial intent from the incident's message (AI or labelled demo mode; no fraud decision) |
+| `POST` | `/api/incidents/{id}/analyze-behaviour` | Compare the request with the sender's synthetic behaviour profile (amount / beneficiary / channel signals; no fraud decision) |
+| `POST` | `/api/incidents/{id}/analyze-risk` | Correlate message, behaviour and (optional multipart `file`) attachment evidence into heuristic risk points, a level and a recommended action; prototype, not proof of fraud, blocks nothing |
 | `GET` | `/api/health` | Liveness check |
 
 ```jsonc

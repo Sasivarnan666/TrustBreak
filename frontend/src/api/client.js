@@ -19,8 +19,9 @@ async function request(path, { method = "GET", body, signal } = {}) {
     response = await fetch(path, {
       method,
       signal,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
+      // FormData sets its own multipart Content-Type (with boundary).
+      headers: body && !(body instanceof FormData) ? { "Content-Type": "application/json" } : undefined,
+      body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
     });
   } catch (err) {
     if (err?.name === "AbortError") throw err;
@@ -56,4 +57,20 @@ export const api = {
   createIncident: (payload) => request("/api/incidents", { method: "POST", body: payload }),
   analyzeMessage: (id, signal) =>
     request(`/api/incidents/${encodeURIComponent(id)}/analyze-message`, { method: "POST", signal }),
+  analyzeBehaviour: (id, signal) =>
+    request(`/api/incidents/${encodeURIComponent(id)}/analyze-behaviour`, { method: "POST", signal }),
+  analyzeAttachment: (id, file, signal) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request(`/api/incidents/${encodeURIComponent(id)}/analyze-attachment`, { method: "POST", body: form, signal });
+  },
+  // The attachment file is optional: without it the assessment has no attachment evidence.
+  analyzeRisk: (id, file, signal) => {
+    let body;
+    if (file) {
+      body = new FormData();
+      body.append("file", file);
+    }
+    return request(`/api/incidents/${encodeURIComponent(id)}/analyze-risk`, { method: "POST", body, signal });
+  },
 };

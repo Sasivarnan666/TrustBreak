@@ -169,3 +169,141 @@ class MessageAnalysisOut(BaseModel):
 class MessageAnalysisResponse(BaseModel):
     success: bool = True
     data: MessageAnalysisOut
+
+
+# --------------------------------------------------------------------------- #
+# Behaviour baseline & anomaly detection (signals only - not a risk score)
+# --------------------------------------------------------------------------- #
+class BehaviourAnomalyOut(BaseModel):
+    type: Literal["amount", "beneficiary", "channel"]
+    code: str
+    severity: Literal["medium", "high"]
+    message: str
+
+
+class BehaviourProfileOut(BaseModel):
+    employee_id: str
+    name: str
+    role: str
+    normal_channels: list[str]
+    known_beneficiaries: list[str]
+    typical_min_amount: Optional[int] = None
+    typical_max_amount: Optional[int] = None
+    historical_payment_count: int
+    request_frequency: Optional[str] = None
+
+
+class BehaviourAnalysisOut(BaseModel):
+    employee_id: Optional[str] = None
+    profile_found: bool
+    amount_anomaly: bool
+    amount_deviation: Optional[float] = None
+    new_beneficiary: bool
+    channel_anomaly: bool
+    frequency_anomaly: bool  # always False today: frequency is not evaluated
+    checks: dict[str, dict]
+    anomalies: list[BehaviourAnomalyOut]
+    profile_summary: Optional[BehaviourProfileOut] = None
+    notes: list[str]
+    is_final_decision: bool = False  # always False: signals only
+
+
+class BehaviourAnalysisResponse(BaseModel):
+    success: bool = True
+    data: BehaviourAnalysisOut
+
+
+# --------------------------------------------------------------------------- #
+# Safe attachment analysis (structural evidence only - not a malware verdict)
+# --------------------------------------------------------------------------- #
+class AttachmentFindingOut(BaseModel):
+    type: str
+    severity: Literal["high", "medium", "low", "info"]
+    message: str
+    entry: Optional[str] = None
+
+
+class AttachmentEntryOut(BaseModel):
+    name: str
+    extension: str
+    category: Literal["executable", "script", "shortcut", "archive", "document", "other"]
+    size_bytes: int
+    compressed_bytes: int
+
+
+class AttachmentAnalysisOut(BaseModel):
+    file_name: str
+    extension: str
+    file_type: str  # detected from content, not from the name
+    content_type: Optional[str] = None  # as declared by the uploader
+    size_bytes: int
+    archive: bool
+    inspected: bool  # False when an archive could not be (or was not) opened
+    file_count: Optional[int] = None
+    total_uncompressed_bytes: Optional[int] = None  # declared by the archive, not verified
+    entries: list[AttachmentEntryOut]
+    extensions: list[str]
+    executable_files: list[str]
+    contains_executable: bool
+    suspicious: bool
+    findings: list[AttachmentFindingOut]
+    notes: list[str]
+    is_final_decision: bool = False  # always False: structural evidence only
+
+
+class AttachmentAnalysisResponse(BaseModel):
+    success: bool = True
+    data: AttachmentAnalysisOut
+
+
+# --------------------------------------------------------------------------- #
+# Risk correlation (heuristic risk points from correlated indicators)
+# NOT a probability and NOT proof of fraud. The engine only recommends.
+# --------------------------------------------------------------------------- #
+class RiskSignalOut(BaseModel):
+    code: str
+    category: str
+    source: Literal["message", "behaviour", "attachment"]
+    severity: Literal["high", "medium", "low"]
+    points: int
+    title: str
+    message: str
+    details: list[str] = []
+
+
+class RiskInputStatusOut(BaseModel):
+    status: Literal["used", "not_provided", "not_evaluated", "unavailable"]
+    mode: Optional[str] = None
+    detail: str
+
+
+class RiskThresholdOut(BaseModel):
+    min_score: int
+    level: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+
+
+class RiskCorrelationOut(BaseModel):
+    risk_score: int  # heuristic risk points, capped at max_score
+    raw_points: int  # uncapped sum of signal points
+    max_score: int
+    risk_level: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    recommended_action: Literal["PROCEED", "VERIFY", "HOLD_PAYMENT"]
+    recommended_action_label: str
+    recommended_action_guidance: str
+    trust_break_detected: bool
+    headline: str
+    explanation: str
+    signals: list[RiskSignalOut]
+    category_points: dict[str, int]
+    inputs: dict[str, RiskInputStatusOut]
+    thresholds: list[RiskThresholdOut]
+    notes: list[str]
+    scoring_method: str
+    disclaimer: str
+    payment_blocked: bool = False  # always False: the engine never blocks or executes a payment
+    is_final_decision: bool = True  # final pipeline output, not proof of fraud
+
+
+class RiskCorrelationResponse(BaseModel):
+    success: bool = True
+    data: RiskCorrelationOut

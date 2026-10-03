@@ -1,6 +1,10 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client.js";
+import AttachmentAnalysisCard from "../components/AttachmentAnalysisCard.jsx";
+import BehaviourAnalysisCard from "../components/BehaviourAnalysisCard.jsx";
 import MessageAnalysisCard from "../components/MessageAnalysisCard.jsx";
+import RiskAssessmentCard from "../components/RiskAssessmentCard.jsx";
 import { ErrorState, LoadingState } from "../components/States.jsx";
 import { StatusBadge, Tag } from "../components/StatusBadge.jsx";
 import { ButtonLink, Card, DataRow } from "../components/ui.jsx";
@@ -21,6 +25,7 @@ function SummaryCell({ label, children, sub }) {
 export function IncidentView({ incident }) {
   const { sender, payment, attachment, analysis } = incident;
   const isPlaceholder = analysis.mode === "placeholder";
+  const [attachmentFile, setAttachmentFile] = useState(null); // shared by Attachment Analysis and the risk assessment
 
   return (
     <>
@@ -57,6 +62,10 @@ export function IncidentView({ incident }) {
         </SummaryCell>
       </div>
 
+      <div className="mt-6">
+        <RiskAssessmentCard incidentId={incident.id} attachmentFile={attachmentFile} hasAttachment={Boolean(attachment)} />
+      </div>
+
       <section
         aria-labelledby="recommended-action"
         className="mt-6 rounded-lg border border-amber-300 border-l-4 border-l-amber-500 bg-amber-50/70 p-5"
@@ -80,6 +89,10 @@ export function IncidentView({ incident }) {
           </Card>
 
           <MessageAnalysisCard incidentId={incident.id} />
+
+          <BehaviourAnalysisCard incidentId={incident.id} />
+
+          {attachment && <AttachmentAnalysisCard incidentId={incident.id} attachmentName={attachment.name} onFileChange={setAttachmentFile} />}
 
           <Card title="Evidence" padded={false} aside={<span className="text-xs text-slate-500">{analysis.evidence.length} items</span>}>
             <table className="w-full text-left text-sm">
@@ -138,7 +151,7 @@ export function IncidentView({ incident }) {
             ) : (
               <p className="text-sm text-slate-600">No attachment was reported with this request.</p>
             )}
-            <p className="mt-3 text-xs text-slate-500">Metadata only. The file itself is not stored or inspected.</p>
+            <p className="mt-3 text-xs text-slate-500">Metadata only. The file itself is never stored; use Attachment Analysis to inspect a copy.</p>
           </Card>
         </div>
       </div>

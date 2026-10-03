@@ -28,6 +28,14 @@ The sender is *known*, so a "known vs unknown sender" check would pass. The ques
 4. **New incident** (`/incidents/new`) - click **Load demo scenario** to pre-fill the same data, or enter your own. Submit with an empty amount to show validation; stop the backend and submit to show the error state.
 5. After submitting you land on the new incident's detail page, and the dashboard counts update.
 
+## Attachment analysis demo (v0.4.0)
+
+Run `python scripts/make_demo_attachment.py` to create the inert synthetic `RBI_Statement.zip` (three text files named `Statement.pdf`, `Update.exe`, `helper.dll`). On TB-0001 open **Attachment Analysis**, choose that file and click **Analyze file**: it reports a 3-file ZIP with executable content, 🔴 `Update.exe`, 🔴 `helper.dll` and 🟠 a document-looking archive, with the notice that this is structural analysis only. Nothing is executed or stored.
+
+## Risk assessment demo (v0.5.0)
+
+On TB-0001 click **Run risk assessment** in the **TrustBreak Risk Assessment** card (top of the page). With the demo data and no file it shows **85 risk points, CRITICAL, HOLD PAYMENT** and **TRUST BREAK DETECTED**: amount above baseline (+20), new beneficiary (+20), unusual channel (+15), high urgency (+10), secrecy (+10), financial transfer request (+10). Choose `RBI_Statement.zip` once in **Attachment Analysis**, then click **Run again** on the risk card: executable content (+25) and a document-looking archive with executables (+20) are added; the raw sum is 130, displayed as 100 (capped). Nothing is hard-coded: the result is computed from the three analyzers' outputs. Say: "This is a prototype risk assessment based on correlated indicators. It is not proof of fraud, the points are not probabilities, and nothing is blocked."
+
 ## What to say about the placeholder
 
 "The pipeline is real - form to API to database to dashboard - but the verdict is a stub. We record the facts and recommend manual verification. The consistency engine is the next phase."
