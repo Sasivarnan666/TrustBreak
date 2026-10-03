@@ -96,7 +96,11 @@ class Incident(BaseModel):
     payment: Payment
     message: str
     attachment: Optional[Attachment] = None
-    analysis: Analysis
+    analysis: Analysis  # the stored 0.1.0 intake placeholder; NOT the security status once risk_assessment exists
+    # v0.6.0: latest persisted TrustBreak risk assessment (null until one has been run).
+    risk_assessment: Optional["StoredRiskAssessmentOut"] = None
+    incident_status: str = "not_assessed"  # not_assessed | proceed | verify | hold_payment
+    incident_status_label: str = "Not assessed"
 
 
 class IncidentSummary(BaseModel):
@@ -113,7 +117,16 @@ class IncidentSummary(BaseModel):
     beneficiary_name: str
     beneficiary_is_new: bool
     has_attachment: bool
-    risk_status: str
+    risk_status: str  # legacy placeholder value; use incident_status / risk_level for the real state
+    # v0.6.0: latest persisted assessment (all null / "not_assessed" when none exists)
+    incident_status: str = "not_assessed"
+    incident_status_label: str = "Not assessed"
+    risk_level: Optional[Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]] = None
+    risk_score: Optional[int] = None
+    recommended_action: Optional[Literal["PROCEED", "VERIFY", "HOLD_PAYMENT"]] = None
+    recommended_action_label: Optional[str] = None
+    trust_break_detected: bool = False
+    assessed_at: Optional[str] = None
 
 
 class IncidentResponse(BaseModel):
@@ -304,6 +317,35 @@ class RiskCorrelationOut(BaseModel):
     is_final_decision: bool = True  # final pipeline output, not proof of fraud
 
 
+class StoredRiskAssessmentOut(RiskCorrelationOut):
+    """A risk assessment as persisted with its incident (v0.6.0)."""
+
+    incident_id: int
+    incident_status: Literal["proceed", "verify", "hold_payment"]
+    incident_status_label: str
+    assessment_version: str
+    assessed_at: Optional[str] = None  # None only when persisted is False
+    persisted: bool = True  # False: computed but deliberately NOT saved (incomplete evidence)
+
+
 class RiskCorrelationResponse(BaseModel):
     success: bool = True
-    data: RiskCorrelationOut
+    data: StoredRiskAssessmentOut
+
+
+class RiskSummaryOut(BaseModel):
+    total: int
+    critical: int
+    high: int
+    medium: int
+    low: int
+    assessed: int
+    not_assessed: int
+
+
+class RiskSummaryResponse(BaseModel):
+    success: bool = True
+    data: RiskSummaryOut
+
+
+Incident.model_rebuild()

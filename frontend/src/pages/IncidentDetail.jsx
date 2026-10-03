@@ -6,10 +6,11 @@ import BehaviourAnalysisCard from "../components/BehaviourAnalysisCard.jsx";
 import MessageAnalysisCard from "../components/MessageAnalysisCard.jsx";
 import RiskAssessmentCard from "../components/RiskAssessmentCard.jsx";
 import { ErrorState, LoadingState } from "../components/States.jsx";
-import { StatusBadge, Tag } from "../components/StatusBadge.jsx";
+import { RiskBadge, Tag } from "../components/StatusBadge.jsx";
 import { ButtonLink, Card, DataRow } from "../components/ui.jsx";
 import { useAsync } from "../hooks/useAsync.js";
 import { formatBytes, formatDateTime, formatINR } from "../lib/format.js";
+import { recommendedActionMeta } from "../lib/risk.js";
 
 function SummaryCell({ label, children, sub }) {
   return (
@@ -25,6 +26,9 @@ function SummaryCell({ label, children, sub }) {
 export function IncidentView({ incident }) {
   const { sender, payment, attachment, analysis } = incident;
   const isPlaceholder = analysis.mode === "placeholder";
+  // The persisted risk assessment (if any) is the incident's real security status; it updates here when re-run.
+  const [assessment, setAssessment] = useState(incident.risk_assessment ?? null);
+  const action = recommendedActionMeta(assessment?.recommended_action);
   const [attachmentFile, setAttachmentFile] = useState(null); // shared by Attachment Analysis and the risk assessment
 
   return (
@@ -44,7 +48,12 @@ export function IncidentView({ incident }) {
             <span className="font-mono">{incident.reference}</span> · Reported {formatDateTime(incident.created_at)}
           </p>
         </div>
-        <StatusBadge status={analysis.risk_status} size="lg" />
+        <div className="flex flex-col items-start gap-1 sm:items-end" data-testid="incident-status">
+          <RiskBadge level={assessment?.risk_level} size="lg" />
+          <span className="text-xs font-medium text-slate-600">
+            {assessment ? `${action?.icon ?? ""} ${assessment.recommended_action_label}` : "No risk assessment yet"}
+          </span>
+        </div>
       </header>
 
       <div className="grid divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-4 lg:divide-x">
@@ -63,22 +72,27 @@ export function IncidentView({ incident }) {
       </div>
 
       <div className="mt-6">
-        <RiskAssessmentCard incidentId={incident.id} attachmentFile={attachmentFile} hasAttachment={Boolean(attachment)} />
+        <RiskAssessmentCard
+          incidentId={incident.id}
+          attachmentFile={attachmentFile}
+          hasAttachment={Boolean(attachment)}
+          assessment={assessment}
+          onAssessed={setAssessment}
+        />
       </div>
 
-      <section
-        aria-labelledby="recommended-action"
-        className="mt-6 rounded-lg border border-amber-300 border-l-4 border-l-amber-500 bg-amber-50/70 p-5"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 id="recommended-action" className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-900">
-            Recommended action
-          </h2>
-          {isPlaceholder && <Tag tone="amber">Placeholder analysis</Tag>}
-        </div>
-        <p className="mt-2 text-[15px] font-medium leading-relaxed text-slate-900">{analysis.recommended_action}</p>
-        <p className="mt-2 text-xs leading-relaxed text-slate-600">{analysis.summary}</p>
-      </section>
+      {!assessment && (
+        <section aria-labelledby="intake-note" className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 id="intake-note" className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-600">
+              Intake note
+            </h2>
+            {isPlaceholder && <Tag>Placeholder · not a risk assessment</Tag>}
+          </div>
+          <p className="mt-2 text-sm leading-relaxed text-slate-800">{analysis.recommended_action}</p>
+          <p className="mt-2 text-xs leading-relaxed text-slate-600">{analysis.summary}</p>
+        </section>
+      )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">

@@ -39,6 +39,32 @@ CREATE TABLE IF NOT EXISTS incidents (
     recommended_action      TEXT    NOT NULL,
     evidence_json           TEXT    NOT NULL
 );
+
+-- v0.6.0: the LATEST risk assessment per incident (one row; running it again replaces the row).
+-- Structured parts are JSON text. Uploaded attachment bytes are never stored.
+CREATE TABLE IF NOT EXISTS risk_assessments (
+    id                           INTEGER PRIMARY KEY AUTOINCREMENT,
+    incident_id                  INTEGER NOT NULL UNIQUE REFERENCES incidents(id) ON DELETE CASCADE,
+    assessment_version           TEXT    NOT NULL,
+    assessed_at                  TEXT    NOT NULL,
+    risk_score                   INTEGER NOT NULL,
+    raw_points                   INTEGER NOT NULL,
+    max_score                    INTEGER NOT NULL,
+    risk_level                   TEXT    NOT NULL CHECK (risk_level IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+    recommended_action           TEXT    NOT NULL,
+    incident_status              TEXT    NOT NULL,
+    trust_break_detected         INTEGER NOT NULL CHECK (trust_break_detected IN (0, 1)),
+    headline                     TEXT    NOT NULL,
+    explanation                  TEXT    NOT NULL,
+    recommended_action_guidance  TEXT    NOT NULL,
+    signals_json                 TEXT    NOT NULL,
+    category_points_json         TEXT    NOT NULL,
+    inputs_json                  TEXT    NOT NULL,
+    thresholds_json              TEXT    NOT NULL,
+    notes_json                   TEXT    NOT NULL,
+    scoring_method               TEXT    NOT NULL,
+    disclaimer                   TEXT    NOT NULL
+);
 """
 
 

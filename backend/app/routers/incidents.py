@@ -4,7 +4,7 @@ import sqlite3
 
 from fastapi import APIRouter, Depends, File, Path, Query, UploadFile, status
 
-from .. import repository
+from .. import repository, risk_repository
 from ..database import get_db
 from ..errors import AppError, NotFoundError
 from ..schemas import (
@@ -18,14 +18,17 @@ from ..schemas import (
     IncidentResponse,
     MessageAnalysisOut,
     MessageAnalysisResponse,
-    RiskCorrelationOut,
     RiskCorrelationResponse,
+    RiskSummaryOut,
+    RiskSummaryResponse,
+    StoredRiskAssessmentOut,
 )
 from ..services.attachment_analysis import AttachmentError, analyze_attachment
 from ..services.attachment_analysis import config as attachment_config
 from ..services.behaviour import analyze_incident_behaviour
 from ..services.message_analysis import ExtractionError, analyze_message
 from ..services.risk_correlation import assess_incident_risk
+from ..services.risk_correlation.incident_status import label_for_status, status_for_level
 
 router = APIRouter(prefix="/api/incidents", tags=["incidents"])
 
@@ -50,6 +53,12 @@ def list_incidents(
         data=items,
         meta=IncidentListMeta(total=total, count=len(items), limit=limit, offset=offset),
     )
+
+
+@router.get("/risk-summary", response_model=RiskSummaryResponse)
+def risk_summary(db: sqlite3.Connection = Depends(get_db)):
+    """Incident counts per latest persisted risk level (plus not assessed). Nothing is derived from the placeholder."""
+    return RiskSummaryResponse(data=RiskSummaryOut(**risk_repository.risk_summary(db)))
 
 
 @router.get("/{incident_id}", response_model=IncidentResponse)
@@ -147,14 +156,17 @@ async def analyze_incident_risk(
     file: UploadFile | None = File(default=None),
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """Correlate message, behaviour and (optionally) attachment evidence.
+    """Correlate message, behaviour and (optionally) attachment evidence, then persist the result.
 
     Deterministic heuristic risk points - not a probability and not proof of
     fraud. The incident stores attachment metadata only, so attachment evidence
     is included only when the file is sent as optional multipart field `file`
-    (analyzed in memory, never executed, extracted or stored). The result is
-    computed on demand and not stored. Nothing is blocked or executed: the
-    response only recommends an action.
+    (analyzed in memory, never executed, extracted or stored). The structured
+    result replaces the incident's latest stored assessment and is returned as
+    persisted. If message analysis was unavailable the evidence is incomplete:
+    the computed result is returned (`persisted: false`) but NOT saved, and any
+    earlier stored assessment is left unchanged. Nothing is blocked or
+    executed: the response only recommends an action.
     """
     incident = repository.get_incident(db, incident_id)
     if incident is None:
@@ -168,7 +180,29 @@ async def analyze_incident_risk(
         result = assess_incident_risk(incident, attachment_file)
     except AttachmentError as exc:
         raise AppError(exc.code, exc.message, status_code=exc.status_code)
-    return RiskCorrelationResponse(data=RiskCorrelationOut(**result.to_dict()))
+    payload = result.to_dict()  # structured output only; the uploaded bytes are not part of it
+
+    if payload["inputs"].get("message", {}).get("status") == "unavailable":
+        payload["notes"] = list(payload["notes"]) + [
+            "This assessment was not saved because message analysis was unavailable (incomplete evidence). "
+            "Any earlier stored assessment is unchanged."
+        ]
+        return RiskCorrelationResponse(
+            data=StoredRiskAssessmentOut(
+                **payload,
+                incident_id=incident_id,
+                incident_status=status_for_level(payload["risk_level"]),
+                incident_status_label=label_for_status(status_for_level(payload["risk_level"])),
+                assessment_version=risk_repository.ASSESSMENT_VERSION,
+                assessed_at=None,
+                persisted=False,
+            )
+        )
+    try:
+        stored = risk_repository.save_risk_assessment(db, incident_id, payload)
+    except risk_repository.IncidentNotFound:
+        raise NotFoundError(f"Incident {incident_id} was not found.")
+    return RiskCorrelationResponse(data=stored)
 
 
 def _clean_name(name: str) -> str:

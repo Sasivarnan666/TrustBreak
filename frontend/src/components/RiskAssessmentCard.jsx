@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client.js";
 import { Tag } from "./StatusBadge.jsx";
 import { Button, Card } from "./ui.jsx";
+import { formatDateTime } from "../lib/format.js";
 
 const SEVERITY = {
   high: { icon: "🔴", cls: "border-red-200 bg-red-50 text-red-900" },
@@ -50,6 +51,12 @@ export function RiskAssessmentView({ assessment }) {
 
   return (
     <div>
+      {assessment.assessed_at && (
+        <p className="mb-3 text-xs text-slate-500" data-testid="assessed-at">
+          Assessed {formatDateTime(assessment.assessed_at)} · assessment v{assessment.assessment_version} · saved with this
+          incident
+        </p>
+      )}
       <div className={`rounded-lg border px-4 py-3 ${level.cls}`}>
         <p className="text-sm font-bold uppercase tracking-[0.1em]">
           {assessment.trust_break_detected ? "🔴 " : ""}
@@ -113,7 +120,10 @@ export function RiskAssessmentView({ assessment }) {
           {action.icon} {action.title}
         </p>
         <p className="mt-1 text-sm leading-relaxed text-slate-800">{assessment.recommended_action_guidance}</p>
-        <p className="mt-2 text-xs text-slate-600">TrustBreak only recommends. No payment is blocked or executed by this assessment.</p>
+        <p className="mt-2 text-xs text-slate-600">
+          The risk assessment is TrustBreak’s deterministic heuristic; the recommended action is decision support for a
+          person. It does not confirm fraud, and no payment is blocked or executed.
+        </p>
       </section>
 
       <div className="mt-4 flex flex-wrap gap-2">
@@ -141,9 +151,16 @@ export function RiskAssessmentView({ assessment }) {
   );
 }
 
-/** Card: run the correlation on demand; optionally includes the attachment file chosen in Attachment Analysis. */
-export default function RiskAssessmentCard({ incidentId, attachmentFile = null, hasAttachment = false }) {
-  const [state, setState] = useState({ status: "idle", assessment: null, error: null });
+/** Card: shows the persisted assessment (if any) and runs/re-runs the correlation on demand.
+ *  Optionally includes the attachment file chosen in Attachment Analysis (never stored by the server). */
+export default function RiskAssessmentCard({
+  incidentId,
+  attachmentFile = null,
+  hasAttachment = false,
+  assessment = null,
+  onAssessed = () => {},
+}) {
+  const [state, setState] = useState({ status: "idle", unsaved: null, error: null });
   const controller = useRef(null);
 
   useEffect(() => () => controller.current?.abort(), []);
@@ -151,37 +168,50 @@ export default function RiskAssessmentCard({ incidentId, attachmentFile = null, 
   async function run() {
     controller.current?.abort();
     controller.current = new AbortController();
-    setState({ status: "loading", assessment: null, error: null });
+    setState((prev) => ({ ...prev, status: "loading", error: null }));
     try {
       const res = await api.analyzeRisk(incidentId, attachmentFile, controller.current.signal);
-      setState({ status: "done", assessment: res.data, error: null });
+      if (res.data.persisted === false) {
+        // Incomplete evidence: shown, but not saved and not the incident's status.
+        setState({ status: "done", unsaved: res.data, error: null });
+      } else {
+        onAssessed(res.data);
+        setState({ status: "done", unsaved: null, error: null });
+      }
     } catch (error) {
       if (error?.name === "AbortError") return;
-      setState({ status: "error", assessment: null, error });
+      // Keep showing the stored assessment; just report the failure.
+      setState((prev) => ({ ...prev, status: "error", error }));
     }
   }
 
   const busy = state.status === "loading";
+  const shown = state.unsaved ?? assessment;
   return (
     <Card
       title="TrustBreak Risk Assessment"
       aside={
         <Button onClick={run} disabled={busy}>
-          {busy ? "Assessing…" : state.status === "done" ? "Run again" : "Run risk assessment"}
+          {busy ? "Assessing…" : assessment ? "Run again" : "Run risk assessment"}
         </Button>
       }
     >
-      {state.status === "idle" && (
-        <p className="text-sm leading-relaxed text-slate-600">
-          Correlates the message, behaviour and attachment evidence into one explainable result. Deterministic rules only; no
-          AI decides the score.
-        </p>
+      {!assessment && !state.unsaved && (
+        <div data-testid="not-assessed">
+          <p className="text-base font-semibold text-slate-800">Not assessed</p>
+          <p className="mt-1 text-sm leading-relaxed text-slate-600">
+            This incident has not yet received a TrustBreak risk assessment. Running it correlates the message, behaviour
+            and attachment evidence into one explainable result and saves it with the incident. Deterministic rules only; no
+            AI decides the score.
+          </p>
+        </div>
       )}
       {hasAttachment && (
         <p className="mt-2 text-xs text-slate-500" data-testid="risk-attachment-hint">
           {attachmentFile ? (
             <>
-              Attachment evidence will use <span className="font-mono">{attachmentFile.name}</span>.
+              Attachment evidence will use <span className="font-mono">{attachmentFile.name}</span> (analyzed in memory, never
+              stored).
             </>
           ) : (
             "No attachment file selected: choose it in Attachment Analysis below to include attachment evidence."
@@ -197,11 +227,18 @@ export default function RiskAssessmentCard({ incidentId, attachmentFile = null, 
         <div role="alert" className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
           {state.error?.message || "The risk assessment could not be produced."}
           {state.error?.code && <span className="ml-2 font-mono text-xs text-red-700/80">code: {state.error.code}</span>}
+          {assessment && <p className="mt-1 text-xs">The previously saved assessment is unchanged.</p>}
         </div>
       )}
-      {state.status === "done" && (
+      {state.unsaved && (
+        <div role="alert" className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          This result was <strong>not saved</strong> because some evidence was unavailable.
+          {assessment ? " The earlier saved assessment is unchanged and still the incident’s status." : ""}
+        </div>
+      )}
+      {shown && (
         <div className="mt-3">
-          <RiskAssessmentView assessment={state.assessment} />
+          <RiskAssessmentView assessment={shown} />
         </div>
       )}
     </Card>

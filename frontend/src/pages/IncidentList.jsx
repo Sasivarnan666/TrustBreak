@@ -2,10 +2,11 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { EmptyState, ErrorState, LoadingState } from "../components/States.jsx";
-import { StatusBadge, Tag } from "../components/StatusBadge.jsx";
+import { RiskBadge, Tag } from "../components/StatusBadge.jsx";
 import { ButtonLink, PageHeader } from "../components/ui.jsx";
 import { useAsync } from "../hooks/useAsync.js";
 import { formatDateTime, formatINR } from "../lib/format.js";
+import { recommendedActionMeta } from "../lib/risk.js";
 
 /** Pure view: filtering is local, over the rows already fetched. */
 export function IncidentTable({ incidents }) {
@@ -39,7 +40,7 @@ export function IncidentTable({ incidents }) {
         <p className="px-5 py-10 text-center text-sm text-slate-600">No incidents match “{query}”.</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[56rem] text-left text-sm">
+          <table className="w-full min-w-[64rem] text-left text-sm">
             <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
               <tr>
                 <th className="px-5 py-3">Reference</th>
@@ -48,7 +49,8 @@ export function IncidentTable({ incidents }) {
                 <th className="px-3 py-3 text-right">Amount</th>
                 <th className="px-3 py-3">Beneficiary</th>
                 <th className="px-3 py-3">Attachment</th>
-                <th className="px-3 py-3">Status</th>
+                <th className="px-3 py-3">Risk</th>
+                <th className="px-3 py-3">Recommended action</th>
                 <th className="px-5 py-3">Created</th>
               </tr>
             </thead>
@@ -73,7 +75,17 @@ export function IncidentTable({ incidents }) {
                   </td>
                   <td className="px-3 py-3.5 text-slate-600">{i.has_attachment ? "Yes" : "—"}</td>
                   <td className="px-3 py-3.5">
-                    <StatusBadge status={i.risk_status} />
+                    <RiskBadge level={i.risk_level} />
+                    {i.trust_break_detected && <p className="mt-1 text-[11px] font-semibold text-red-700">Trust break</p>}
+                  </td>
+                  <td className="px-3 py-3.5 text-slate-700" data-testid="row-action">
+                    {i.recommended_action ? (
+                      <>
+                        {recommendedActionMeta(i.recommended_action)?.icon} {i.recommended_action_label}
+                      </>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
                   </td>
                   <td className="whitespace-nowrap px-5 py-3.5 text-xs text-slate-500">{formatDateTime(i.created_at)}</td>
                 </tr>

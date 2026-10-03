@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-10-03 · Version 0.5.0 (foundation + AI message extraction + behaviour baseline + safe attachment analysis + **risk correlation engine**) · 179/179 backend tests passing, frontend build passing_
+_Last updated: 2026-10-03 · Version 0.6.0 (foundation + AI message extraction + behaviour baseline + safe attachment analysis + risk correlation engine + **persisted risk assessment & real incident status**) · 216/216 backend tests passing, frontend build passing_
 
 ## What was implemented
 
@@ -177,6 +177,64 @@ No execution, no extraction, no member reads, no file writes by the analyzer, no
 - The keyword list for "document-looking" names is small and English-only; the file must be re-uploaded for each analysis (nothing is stored); results are not persisted.
 - Severity is a heuristic ordering of structural indicators, not a likelihood of malice.
 
+## Feature added in 0.6.0: Persisted risk assessment & real incident status (COMPLETED)
+
+When a risk assessment is run it is now **saved with the incident** and becomes the incident's security status. The correlation engine, its weights and thresholds are unchanged.
+
+Flow: `message / behaviour / attachment analysis -> risk correlation (pure) -> risk_repository (SQL) -> incident API / list / dashboard`.
+
+### Persistence design
+- Table `risk_assessments` (created by `CREATE TABLE IF NOT EXISTS` at startup, like `incidents`; an existing 0.5.0 database simply gains the table, no migration tool). **One row per incident** (`incident_id UNIQUE`, `ON DELETE CASCADE`): the latest snapshot. Running the assessment again replaces it (`INSERT ... ON CONFLICT DO UPDATE`), so "latest" is trivially the row. No history is kept (see limitations).
+- Columns: `risk_score, raw_points, max_score, risk_level (CHECK), recommended_action, incident_status, trust_break_detected, headline, explanation, recommended_action_guidance, scoring_method, disclaimer, assessed_at (UTC ISO-8601 Z), assessment_version`, plus JSON text: `signals_json, category_points_json, inputs_json, thresholds_json, notes_json`. Thresholds are stored with the snapshot so it stays interpretable if they change.
+- `assessment_version` is the constant `ASSESSMENT_VERSION = "0.6.0"` in `risk_repository.py`. Bump it when weights, thresholds or the stored shape change.
+- Code: `app/risk_repository.py` (save / get latest / summary), `app/repository.py` (incident detail attaches the assessment; the list uses one LEFT JOIN), `services/risk_correlation/incident_status.py` (pure mapping). The engine imports none of them (AST-tested).
+- **Never stored:** uploaded attachment bytes. Only the structured result is saved (a test uploads a zip containing a marker and scans every column of every table). File names of executable entries appear in signal details, as before.
+
+### Incident status mapping
+| Risk level | Recommended action | Incident status |
+|---|---|---|
+| LOW | PROCEED | `proceed` |
+| MEDIUM | VERIFY | `verify` |
+| HIGH | VERIFY | `verify` |
+| CRITICAL | HOLD_PAYMENT | `hold_payment` |
+| no assessment | - | `not_assessed` ("Not assessed") |
+
+`hold_payment` means TrustBreak **recommends** that a human holds the transaction pending independent verification. Nothing is blocked (`payment_blocked` is always false). The old stored `needs_review` is no longer used as a status by the UI or the dashboard.
+
+### API changes
+- `POST /api/incidents/{id}/analyze-risk`: runs the pipeline, **persists**, returns the stored assessment (superset of the 0.5.0 response plus `incident_id, incident_status, incident_status_label, assessment_version, assessed_at, persisted`). If message analysis is `unavailable` the 0.5.0 behaviour is kept (200 with the unavailable input flagged) but the result is returned with `persisted: false`, a note, and **is not saved**; any earlier stored assessment is untouched. A bad attachment still returns its error and saves nothing.
+- `GET /api/incidents/{id}`: new `risk_assessment` (null if none), `incident_status`, `incident_status_label`. `analysis` is unchanged.
+- `GET /api/incidents`: rows gain `incident_status, incident_status_label, risk_level, risk_score, recommended_action, recommended_action_label, trust_break_detected, assessed_at` (null / `not_assessed` when none). `risk_status` is kept for compatibility but is the legacy placeholder.
+- `GET /api/incidents/risk-summary` (registered before `/{incident_id}`): `{total, critical, high, medium, low, assessed, not_assessed}` computed in SQL from persisted assessments only.
+
+### Frontend changes
+Risk card loads the persisted assessment from the incident (a refresh shows it without re-running), shows "Not assessed" + explanation before a run, the assessed time and version, "Run again" to replace the snapshot, and keeps the saved result visible if a re-run fails or returns an unsaved result. Detail header, incident list ("Risk" + "Recommended action" columns) and dashboard (six KPIs) use the persisted level; incidents without one show "Not assessed". Wording separates "risk assessment" (deterministic heuristic) from "recommended action" (decision support); the disclaimer is unchanged.
+
+### Files added
+`backend/app/risk_repository.py`, `backend/app/services/risk_correlation/incident_status.py`, `backend/tests/test_risk_persistence.py` (21 tests), `backend/tests/test_risk_persistence_api.py` (16 tests).
+
+### Files modified
+`backend/app/database.py`, `backend/app/schemas.py`, `backend/app/repository.py`, `backend/app/routers/incidents.py`, `backend/tests/test_risk_correlation_api.py` (one test rewritten for the new contract), `frontend/src/{lib/risk.js, components/StatusBadge.jsx, components/RiskAssessmentCard.jsx, pages/IncidentDetail.jsx, pages/IncidentList.jsx, pages/Dashboard.jsx, api/client.js}`, README and these docs.
+
+### Verification of this feature
+| Check | Result |
+|---|---|
+| `python -m unittest discover -s tests -t . -v` (clean venv, FastAPI/httpx installed) | **216 run, 216 passed, 0 failed, 0 skipped** (179 existing + 37 new) |
+| `npm run build` | **Passed** (48 modules) |
+| Live uvicorn on a temp SQLite file, real HTTP | demo incident: before = `risk_assessment null / Not assessed`; after `analyze-risk` = 85 CRITICAL / HOLD_PAYMENT / TRUST BREAK DETECTED / `hold_payment`; a fresh GET and a GET after **restarting the server** return the same assessment and `assessed_at`; list shows CRITICAL + Hold payment; summary `critical 1`. Normal payment: 10 LOW / PROCEED / `proceed`. |
+| Server-side render of the changed views with live API payloads (react-dom/server, not a browser) | detail (persisted and not assessed), list and dashboard contain the expected text and none of "Needs review" / `needs_review` |
+| Real browser run-then-refresh | **NOT run**: no browser could be installed in this session (Playwright download blocked, HTTP 403). The persistence half of that test is covered by HTTP-level tests and the live restart check; click behaviour and layout are unverified. |
+| Real Anthropic API | Not run (no key); tests use the labelled demo extractor |
+
+### Known limitations (0.6.0)
+- Latest snapshot only: re-running overwrites the previous assessment; there is no history or audit trail.
+- The browser flow (click, refresh, layout) has not been driven in a real browser for this version (see above).
+- Attachment evidence is stored only as derived findings; to re-include it the file must be re-sent. A run without the file after a run with it replaces the stronger snapshot with the weaker one (the card shows "Attachment: Not provided").
+- Incomplete assessments (message analysis unavailable) are shown but not saved, so such an incident stays "Not assessed" until a complete run succeeds.
+- No concurrency control beyond SQLite's: last write wins.
+- Risk-summary and list are not paginated in the UI (list capped at 500 as before). The legacy `risk_status` / `analysis` fields remain in the API.
+- All 0.5.0 limitations still apply (uncalibrated heuristic weights, synthetic behaviour data, structural attachment analysis, not proof of fraud). App/health version strings still read 0.1.0.
+
 ## Feature added in 0.5.0: Risk Correlation Engine (COMPLETED)
 
 First module that combines the independent evidence sources. It consumes the **structured outputs** of message analysis, behaviour analysis and attachment analysis and correlates them with transparent, deterministic rules. **No LLM is asked whether something is a scam**; the only AI in the pipeline is the existing message *extraction*, and the score never depends on a model's opinion. The result explains the *combination* of signals ("the requested financial action is inconsistent with the trusted context"), not "AI thinks this is a scam".
@@ -317,4 +375,6 @@ The build environment could **not** reach PyPI or the npm registry (HTTP 403 `ho
 
 **Step 1 - DONE in 0.5.0: the risk correlation engine** (see "Feature added in 0.5.0"). It combines `analyze_message` extraction, `analyze_behaviour` signals and attachment analysis into an explainable, deterministic risk level and recommended action. The older trusted-profile / `trusted_profiles` table idea (original text of this step) is superseded by the behaviour baseline.
 
-**Step 2 - the single next recommended feature: persist the risk assessment with the incident and make it the incident's real status.** Store the assessment (score, level, action, signals, inputs, timestamp) when it is run, retire the placeholder `needs_review` status and the fixed placeholder recommended-action on the list, dashboard and detail pages in favour of the stored level, and show which analyses were run. This needs a deliberate schema change (a stored analysis snapshot or table) and is the prerequisite for the case workflow (ROADMAP step 4). See [ROADMAP.md](ROADMAP.md).
+**Step 2 - DONE in 0.6.0: persist the risk assessment with the incident and make it the incident's real status.** Store the assessment (score, level, action, signals, inputs, timestamp) when it is run, retire the placeholder `needs_review` status and the fixed placeholder recommended-action on the list, dashboard and detail pages in favour of the stored level, and show which analyses were run. This needs a deliberate schema change (a stored analysis snapshot or table) and is the prerequisite for the case workflow (ROADMAP step 4). See [ROADMAP.md](ROADMAP.md).
+
+**Step 3 - the single next recommended feature (after 0.6.0): case workflow.** Let a human act on the stored recommendation: an incident status (open / verified / rejected), a required reason or analyst note, and an audit trail of who decided what and when, kept separate from the machine-generated assessment. Prerequisite (a persisted assessment) is now met. See [ROADMAP.md](ROADMAP.md) step 4.

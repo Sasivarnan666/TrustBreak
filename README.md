@@ -2,7 +2,7 @@
 
 AI-assisted **trusted-channel financial fraud defense**. Instead of only asking *"is this sender a scammer?"*, TrustBreak checks whether a financial request is **consistent** with the sender's identity, communication channel, payment details, attachment characteristics and historical behaviour.
 
-> **Status: hackathon MVP foundation (v0.1.0).** Incidents can be created, stored and viewed end to end. The analysis step is a **placeholder** - no fraud detection or AI runs yet. Not a production banking system. All demo data is synthetic.
+> **Status: hackathon prototype (v0.6.0).** Incidents can be created, stored and viewed end to end. A deterministic, explainable risk assessment (message + behaviour + attachment evidence) can be run per incident; the latest result is **saved with the incident** and drives its status in the detail page, list and dashboard. It is decision support, not proof of fraud, and nothing is blocked. Not a production banking system. All demo data is synthetic.
 
 ## Stack
 
@@ -70,7 +70,8 @@ All responses share one envelope.
 | `GET` | `/api/incidents/{id}` | Incident detail |
 | `POST` | `/api/incidents/{id}/analyze-message` | Extract entities / financial intent from the incident's message (AI or labelled demo mode; no fraud decision) |
 | `POST` | `/api/incidents/{id}/analyze-behaviour` | Compare the request with the sender's synthetic behaviour profile (amount / beneficiary / channel signals; no fraud decision) |
-| `POST` | `/api/incidents/{id}/analyze-risk` | Correlate message, behaviour and (optional multipart `file`) attachment evidence into heuristic risk points, a level and a recommended action; prototype, not proof of fraud, blocks nothing |
+| `POST` | `/api/incidents/{id}/analyze-risk` | Correlate message, behaviour and (optional multipart `file`) attachment evidence into heuristic risk points, a level and a recommended action, then **save it as the incident's latest assessment** (`persisted: false` and not saved if message analysis was unavailable); prototype, not proof of fraud, blocks nothing. Attachment bytes are never stored |
+| `GET` | `/api/incidents/risk-summary` | Counts of incidents per persisted risk level (critical / high / medium / low) and not assessed |
 | `GET` | `/api/health` | Liveness check |
 
 ```jsonc

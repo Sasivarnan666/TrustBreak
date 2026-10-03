@@ -1,11 +1,27 @@
-/** Display metadata for risk_status values returned by the API.
- *  Only "needs_review" exists in this build; unknown values fall back to a neutral badge. */
-const RISK_STATUS = {
-  needs_review: { label: "Needs review", tone: "amber", hint: "Awaiting manual verification" },
+/** Display metadata for the persisted risk state returned by the API (v0.6.0).
+ *  "Risk level" is TrustBreak's deterministic heuristic assessment; the recommended action is decision support
+ *  for a human. Neither is a fraud verdict and nothing is blocked. Incidents without an assessment are
+ *  "Not assessed" - the legacy placeholder status is never shown as a risk classification. */
+const LEVELS = {
+  CRITICAL: { label: "CRITICAL", tone: "red" },
+  HIGH: { label: "HIGH", tone: "orange" },
+  MEDIUM: { label: "MEDIUM", tone: "amber" },
+  LOW: { label: "LOW", tone: "emerald" },
+};
+const NOT_ASSESSED = { label: "Not assessed", tone: "slate" };
+
+export function riskLevelMeta(level) {
+  return LEVELS[level] ?? NOT_ASSESSED;
+}
+
+const ACTIONS = {
+  PROCEED: { label: "Proceed", icon: "🟢" },
+  VERIFY: { label: "Verify before paying", icon: "🟠" },
+  HOLD_PAYMENT: { label: "Hold payment", icon: "🔴" },
 };
 
-export function riskMeta(status) {
-  return RISK_STATUS[status] ?? { label: status || "Unknown", tone: "slate", hint: "" };
+export function recommendedActionMeta(action) {
+  return ACTIONS[action] ?? null;
 }
 
 export const CHANNELS = ["WhatsApp", "Email", "SMS", "Phone call", "Other"];

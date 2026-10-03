@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0 - 2026-10-03 - Persisted risk assessment & real incident status
+
+### Added
+- `risk_assessments` table (created by the existing startup schema, no migration framework): the LATEST assessment per incident, one row (`incident_id UNIQUE`), replaced on every run. Scalar columns for score, raw points, max score, level, recommended action, incident status, trust-break flag, headline, explanation, guidance, scoring method, disclaimer, `assessed_at` and `assessment_version`; JSON text for signals, category points, inputs, thresholds and notes.
+- `backend/app/risk_repository.py`: `save_risk_assessment` (upsert, transactional, rejects unknown incidents and malformed results), `get_latest_risk_assessment`, `risk_summary` (SQL counts). The risk engine is unchanged and contains no SQL.
+- `services/risk_correlation/incident_status.py`: LOW -> `proceed`, MEDIUM -> `verify`, HIGH -> `verify`, CRITICAL -> `hold_payment`; `not_assessed` when none exists.
+- `POST /api/incidents/{id}/analyze-risk` now persists and returns the stored assessment (extra fields: `incident_id`, `incident_status`, `incident_status_label`, `assessment_version`, `assessed_at`, `persisted`).
+- `GET /api/incidents/{id}` adds `risk_assessment` (null until assessed), `incident_status`, `incident_status_label`. `GET /api/incidents` rows add `incident_status(_label)`, `risk_level`, `risk_score`, `recommended_action(_label)`, `trust_break_detected`, `assessed_at` via a single LEFT JOIN (no N+1).
+- `GET /api/incidents/risk-summary`: counts of total / critical / high / medium / low / not assessed from persisted assessments.
+- Assessment version `0.6.0` stored with each snapshot.
+- Frontend: the Risk Assessment card loads the stored result (no re-run needed after a refresh), shows "Not assessed" before a run, the assessment time and version, and "Run again" replaces the snapshot. Incident list shows risk level + recommended action or "Not assessed". Dashboard KPIs: total, critical, high, medium, low, not assessed. Detail header shows the persisted level.
+- Tests: 37 new (216 total, 0 skipped).
+
+### Changed
+- The stored 0.1.0 placeholder (`needs_review` + fixed text) is no longer shown as a status anywhere in the UI. The API keeps `analysis` / `risk_status` unchanged for backward compatibility; before an assessment exists the detail page shows it only as a neutral "Intake note - placeholder, not a risk assessment".
+- The v0.5.0 test "nothing is stored" was rewritten to its new meaning (the placeholder `analysis` block is untouched; the assessment is stored).
+
+### Behaviour worth knowing
+- If message analysis is unavailable (e.g. `TRUSTBREAK_AI_MODE=ai` without a key) the request still returns 200 as in 0.5.0, but the incomplete result is returned with `persisted: false` and is NOT saved; an earlier stored assessment stays as it was.
+- Uploaded attachment bytes are analyzed in memory and never stored; only derived structured evidence (e.g. executable file names) is saved.
+- `hold_payment` is a recommendation to a human. Nothing is blocked.
+
 ## 0.5.0 - 2026-10-03 - Risk Correlation Engine
 
 ### Added

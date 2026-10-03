@@ -15,7 +15,9 @@ from .schemas import (
     Payment,
     Sender,
 )
+from . import risk_repository
 from .services.analysis import analyze_incident
+from .services.risk_correlation.incident_status import NOT_ASSESSED, label_for_status
 
 
 def _now() -> str:
@@ -72,12 +74,30 @@ def create_incident(conn: sqlite3.Connection, payload: IncidentCreate) -> Incide
 
 def get_incident(conn: sqlite3.Connection, incident_id: int) -> Optional[Incident]:
     row = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
-    return _row_to_incident(row) if row else None
+    if not row:
+        return None
+    incident = _row_to_incident(row)
+    assessment = risk_repository.get_latest_risk_assessment(conn, incident_id)
+    if assessment is not None:
+        incident.risk_assessment = assessment
+        incident.incident_status = assessment.incident_status
+        incident.incident_status_label = assessment.incident_status_label
+    return incident
 
 
 def list_incidents(conn: sqlite3.Connection, limit: int = 100, offset: int = 0) -> list[IncidentSummary]:
+    # One query: the latest assessment is a single row per incident, so a LEFT JOIN avoids N+1.
     rows = conn.execute(
-        "SELECT * FROM incidents ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset)
+        """
+        SELECT i.*,
+               r.risk_level AS r_risk_level, r.risk_score AS r_risk_score,
+               r.recommended_action AS r_recommended_action, r.incident_status AS r_incident_status,
+               r.trust_break_detected AS r_trust_break, r.assessed_at AS r_assessed_at
+        FROM incidents i
+        LEFT JOIN risk_assessments r ON r.incident_id = i.id
+        ORDER BY i.id DESC LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
     ).fetchall()
     return [_row_to_summary(row) for row in rows]
 
@@ -87,7 +107,17 @@ def count_incidents(conn: sqlite3.Connection) -> int:
 
 
 def _row_to_summary(row: sqlite3.Row) -> IncidentSummary:
+    assessed = row["r_risk_level"] is not None
+    action = row["r_recommended_action"] if assessed else None
     return IncidentSummary(
+        incident_status=row["r_incident_status"] if assessed else NOT_ASSESSED,
+        incident_status_label=label_for_status(row["r_incident_status"] if assessed else NOT_ASSESSED),
+        risk_level=row["r_risk_level"],
+        risk_score=row["r_risk_score"],
+        recommended_action=action,
+        recommended_action_label=risk_repository._ACTION_LABELS.get(action) if assessed else None,
+        trust_break_detected=bool(row["r_trust_break"]) if assessed else False,
+        assessed_at=row["r_assessed_at"],
         id=row["id"],
         reference=_reference(row["id"]),
         created_at=row["created_at"],

@@ -92,11 +92,15 @@ class AnalyzeRiskApiTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/incidents/0/analyze-risk").status_code, 422)
         self.assertEqual(self.client.get("/api/incidents/1/analyze-risk").status_code, 405)
 
-    def test_nothing_is_stored_and_existing_endpoints_are_unchanged(self):
+    def test_placeholder_analysis_is_untouched_and_existing_endpoints_are_unchanged(self):
+        # v0.6.0: the assessment IS now persisted (see test_risk_persistence_api.py), but the stored
+        # 0.1.0 placeholder `analysis` block is never rewritten.
         before = self.client.get("/api/incidents/1").json()["data"]
+        self.assertIsNone(before["risk_assessment"])
         self.client.post("/api/incidents/1/analyze-risk")
         after = self.client.get("/api/incidents/1").json()["data"]
-        self.assertEqual(before, after)
+        self.assertEqual(before["analysis"], after["analysis"])
+        self.assertIsNotNone(after["risk_assessment"])
         self.assertEqual(after["analysis"]["mode"], "placeholder")
         self.assertEqual(self.client.get("/api/health").status_code, 200)
         self.assertEqual(self.client.post("/api/incidents/1/analyze-message").status_code, 200)

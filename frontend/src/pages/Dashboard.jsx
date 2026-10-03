@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { EmptyState, ErrorState, LoadingState } from "../components/States.jsx";
-import { StatusBadge, Tag } from "../components/StatusBadge.jsx";
+import { RiskBadge, Tag } from "../components/StatusBadge.jsx";
 import { ButtonLink, Card, PageHeader } from "../components/ui.jsx";
 import { useAsync } from "../hooks/useAsync.js";
 import { formatDateTime, formatINR } from "../lib/format.js";
@@ -22,21 +22,21 @@ function channelCounts(incidents) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-/** Pure view: everything it needs arrives as props. */
-export function DashboardView({ incidents, total }) {
-  const needsReview = incidents.filter((i) => i.risk_status === "needs_review");
-  const valueUnderReview = needsReview.reduce((sum, i) => sum + i.amount, 0);
-  const newBeneficiaries = incidents.filter((i) => i.beneficiary_is_new).length;
+/** Pure view: everything it needs arrives as props. `summary` holds counts of PERSISTED risk assessments. */
+export function DashboardView({ incidents, total, summary }) {
+  const counts = summary ?? { total, critical: 0, high: 0, medium: 0, low: 0, assessed: 0, not_assessed: total };
   const channels = channelCounts(incidents);
   const maxChannel = Math.max(...channels.map(([, n]) => n), 1);
 
   return (
     <>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Kpi label="Total incidents" value={total} hint="All recorded payment requests" />
-        <Kpi label="Needs review" value={needsReview.length} hint="Awaiting manual verification" />
-        <Kpi label="Value under review" value={formatINR(valueUnderReview)} hint="Sum of amounts needing review" />
-        <Kpi label="New beneficiaries" value={newBeneficiaries} hint="Payees not previously used" />
+      <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
+        <Kpi label="Total incidents" value={counts.total} hint="All recorded requests" />
+        <Kpi label="Critical" value={counts.critical} hint="Hold payment recommended" />
+        <Kpi label="High" value={counts.high} hint="Verify before paying" />
+        <Kpi label="Medium" value={counts.medium} hint="Verify before paying" />
+        <Kpi label="Low" value={counts.low} hint="Proceed" />
+        <Kpi label="Not assessed" value={counts.not_assessed} hint="No risk assessment run yet" />
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
@@ -65,7 +65,7 @@ export function DashboardView({ incidents, total }) {
                     <p className="text-sm font-semibold tabular-nums text-slate-900">{formatINR(incident.amount)}</p>
                     {incident.beneficiary_is_new && <Tag tone="amber">New beneficiary</Tag>}
                   </div>
-                  <StatusBadge status={incident.risk_status} />
+                  <RiskBadge level={incident.risk_level} />
                 </Link>
               </li>
             ))}
@@ -89,14 +89,14 @@ export function DashboardView({ incidents, total }) {
             </ul>
           </Card>
 
-          <Card title="Analysis engine">
+          <Card title="Risk engine">
             <div className="flex items-center gap-2">
-              <Tag tone="amber">Placeholder</Tag>
-              <span className="text-sm font-medium text-slate-800">No detection active</span>
+              <Tag tone="brand">Deterministic</Tag>
+              <span className="text-sm font-medium text-slate-800">Heuristic risk points</span>
             </div>
             <p className="mt-2 text-sm leading-relaxed text-slate-600">
-              Incidents are stored and marked for manual review. Submitted details are listed as evidence; no
-              fraud analysis is performed in this build.
+              Counts above come from stored TrustBreak risk assessments only. Incidents without one are “Not assessed”.
+              Assessments are decision support, not proof of fraud, and no payment is blocked.
             </p>
           </Card>
         </div>
@@ -106,7 +106,13 @@ export function DashboardView({ incidents, total }) {
 }
 
 export default function Dashboard() {
-  const { data, error, loading, reload } = useAsync((signal) => api.listIncidents({ limit: 500 }, signal), []);
+  const { data, error, loading, reload } = useAsync(
+    async (signal) => {
+      const [list, summary] = await Promise.all([api.listIncidents({ limit: 500 }, signal), api.riskSummary(signal)]);
+      return { ...list, summary: summary.data };
+    },
+    [],
+  );
 
   return (
     <>
@@ -125,7 +131,7 @@ export default function Dashboard() {
           action={<ButtonLink to="/incidents/new">Create the first incident</ButtonLink>}
         />
       )}
-      {data && data.data.length > 0 && <DashboardView incidents={data.data} total={data.meta.total} />}
+      {data && data.data.length > 0 && <DashboardView incidents={data.data} total={data.meta.total} summary={data.summary} />}
     </>
   );
 }

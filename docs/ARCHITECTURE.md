@@ -9,7 +9,8 @@
  FastAPI app (:8000)
    routers/incidents.py   HTTP only: parse, call repository, wrap in envelope
    schemas.py             Pydantic: request validation + response shapes
-   repository.py          SQL (stdlib sqlite3), row <-> model mapping
+   repository.py          SQL (stdlib sqlite3), incident row <-> model mapping (joins the latest assessment)
+   risk_repository.py     SQL for persisted risk assessments (save / latest / summary)
    services/analysis.py   PLACEHOLDER analysis (replaceable seam)
    services/message_analysis/  message -> validated structured JSON (AI or labelled demo mock)
    services/behaviour/    synthetic profile + deterministic anomaly signals (no scoring)
@@ -18,7 +19,7 @@
    errors.py + main.py    one JSON envelope for success and every failure
         │
         ▼
- SQLite file  data/trustbreak.db   (one `incidents` table)
+ SQLite file  data/trustbreak.db   (`incidents` + `risk_assessments`)
 ```
 
 Frontend and backend share nothing except the REST contract below.
@@ -30,7 +31,8 @@ Frontend and backend share nothing except the REST contract below.
 | `main.py` | App factory, lifespan (create DB, seed demo), CORS, error handlers, `/api/health` | contain business logic |
 | `routers/incidents.py` | The incident endpoints (CRUD plus on-demand message, behaviour, attachment and risk analysis) | touch SQL directly |
 | `schemas.py` | Validation rules and response models | know about the database |
-| `repository.py` | Create / get / list / count incidents | validate input or decide risk |
+| `repository.py` | Create / get / list / count incidents; attaches the latest assessment (one LEFT JOIN on the list) | validate input or decide risk |
+| `risk_repository.py` | Save (upsert) / get latest / summarise persisted risk assessments | compute scores or import the analyzers |
 | `services/analysis.py` | `analyze_incident(payload) -> Analysis` | persist anything |
 | `database.py` | Connections, schema, `get_db` dependency | |
 | `seed.py` | Synthetic demo incident | |
@@ -113,13 +115,23 @@ Incident ──┬─ analyze_message()           ─┐
 
 Rules: the correlation layer sits **above** the analyzers. They stay independently usable and import nothing from each other or from this package (enforced by an AST test); no LLM is consulted for the score; the engine only recommends and never blocks or executes a payment. Scores are heuristic risk points, not probabilities. `POST /api/incidents/{id}/analyze-risk` takes an optional multipart `file` (attachment evidence needs the bytes, which are not stored), is computed on demand and not stored. See PROJECT_STATE for the weight table, thresholds and limitations.
 
+### Persisted risk assessment (v0.6.0)
+
+```
+message_analysis ┐
+behaviour        ├─> risk_correlation (pure) ─> risk_repository (SQL) ─> incident detail / list / dashboard
+attachment (mem) ┘                                  risk_assessments table
+```
+
+`POST /analyze-risk` runs `assess_incident_risk`, turns the result into a dict and calls `risk_repository.save_risk_assessment`. The engine has no SQL, HTTP, filesystem, LLM or payment code (AST-tested). Table `risk_assessments` holds the latest snapshot per incident (`incident_id UNIQUE`, upsert), with scalar columns for the headline numbers and JSON text for signals, inputs, thresholds and notes, plus `assessment_version` and `assessed_at`. Uploaded bytes are analyzed in memory and never stored. An incomplete result (message analysis unavailable) is returned with `persisted: false` and not saved. `services/risk_correlation/incident_status.py` maps level to incident status: LOW -> `proceed`, MEDIUM/HIGH -> `verify`, CRITICAL -> `hold_payment`, none -> `not_assessed` (a recommendation to a human; nothing is blocked). The list endpoint LEFT JOINs the latest assessment (no N+1) and `GET /api/incidents/risk-summary` counts levels in SQL.
+
 ### The analysis seam
 
-`analyze_incident` is the single place future detection plugs in. Today it is still a placeholder (the risk correlation engine runs on demand beside it and is not stored; persisting it is the next planned step): it returns `risk_status = "needs_review"`, a fixed recommended action, and evidence items that are the submitted facts (`source = "submitted"`). The result is computed once at creation and stored with the incident. Replacing it with real analysis should not change the router, the schemas' envelope, or the frontend's data flow.
+`analyze_incident` is the single place future detection plugs in. Today it is still a placeholder (the risk correlation engine runs on demand beside it; since 0.6.0 its result is persisted and is the incident's real status, while this placeholder is kept only as an intake note): it returns `risk_status = "needs_review"`, a fixed recommended action, and evidence items that are the submitted facts (`source = "submitted"`). The result is computed once at creation and stored with the incident. Replacing it with real analysis should not change the router, the schemas' envelope, or the frontend's data flow.
 
 ## Data model
 
-Single table `incidents` (flat columns; the API nests them):
+Table `incidents` (flat columns; the API nests them) and, since 0.6.0, `risk_assessments` (latest assessment per incident, described above):
 
 | Group | Columns |
 |---|---|
@@ -144,7 +156,7 @@ failure: { "success": false, "error": { "code", "message", "details": [{ "field"
 
 `POST /api/incidents` body (flat): `sender_name`, `sender_role`, `sender_known`, `sender_contact?`, `channel`, `amount`, `beneficiary_name`, `beneficiary_is_new`, `message`, `attachment_name?`, `attachment_size_bytes?`, `attachment_content_type?`. Unknown fields are rejected.
 
-Incident detail (`GET /api/incidents/{id}`) returns nested `sender`, `payment`, `attachment` (nullable) and `analysis { mode, risk_status, summary, recommended_action, evidence[] }`. List rows are flat summaries.
+Incident detail (`GET /api/incidents/{id}`) returns nested `sender`, `payment`, `attachment` (nullable), `analysis { mode, risk_status, summary, recommended_action, evidence[] }` (the stored intake placeholder), and since 0.6.0 `risk_assessment` (nullable), `incident_status` and `incident_status_label`. List rows are flat summaries that also carry the latest risk level / action / status (or `not_assessed`).
 
 ## Frontend (`frontend/src/`)
 
@@ -160,4 +172,4 @@ Pages that display data are split into a fetching component and a pure `*View` c
 
 ## Deliberate non-goals (this phase)
 
-No authentication, no risk scoring or fraud verdict (AI only extracts message fields; behaviour analysis only emits signals from synthetic profiles), no stored behavioural history, no stored files (attachments are analyzed in memory and discarded), no external integrations (banking, WhatsApp), no payment processing, no migrations tooling.
+No authentication, no case workflow or assessment history, no fraud verdict (AI only extracts message fields; behaviour analysis only emits signals from synthetic profiles), no stored behavioural history, no stored files (attachments are analyzed in memory and discarded), no external integrations (banking, WhatsApp), no payment processing, no migrations tooling.
