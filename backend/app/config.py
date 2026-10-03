@@ -8,9 +8,37 @@ so tests can point the app at a temporary database.
 import os
 from pathlib import Path
 
-# backend/app/config.py -> parents[2] is the repository root
+# backend/app/config.py -> parents[2] is the repository root, parents[1] is backend/
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "trustbreak.db"
+
+# Git-ignored file holding local secrets (e.g. GEMINI_API_KEY). Anchored to this file's
+# location, so it does not depend on the directory uvicorn is started from.
+ENV_FILE = BACKEND_DIR / ".env"
+
+
+def load_env_file(path=None) -> bool:
+    """Load KEY=VALUE pairs from backend/.env into os.environ. Returns True if a file was read.
+
+    - Variables already set (non-empty) in the real environment WIN; .env never overrides them.
+    - A variable that is set but blank in the environment is filled from .env.
+    - A missing file is fine (the app then uses the real environment / labelled demo mode).
+    - Set TRUSTBREAK_LOAD_DOTENV=0 to skip loading (the test suite does this so a developer's
+      real .env can never leak into tests).
+    - Values are never logged or returned.
+    """
+    if os.environ.get("TRUSTBREAK_LOAD_DOTENV", "1") == "0":
+        return False
+    env_path = Path(path) if path is not None else ENV_FILE
+    if not env_path.is_file():
+        return False
+    from dotenv import dotenv_values
+
+    for name, value in dotenv_values(env_path).items():
+        if value is not None and not os.environ.get(name, "").strip():
+            os.environ[name] = value
+    return True
 
 
 def get_db_path() -> Path:

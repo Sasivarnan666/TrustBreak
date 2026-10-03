@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.7.3 (patch) - 2026-10-03 - Backend loads backend/.env automatically
+
+Reported: the UI said "No AI API key is configured (GEMINI_API_KEY is not set)" although `backend/.env` held the key. **Root cause:** nothing in the backend ever read `.env`; the key only reached the app if it was exported into the shell first, and `python-dotenv` was not installed. Gemini adapter, provider/model behaviour, extraction, behaviour, attachment and risk code are untouched.
+
+### Changed
+- `app/config.py`: `ENV_FILE` (anchored to `backend/.env`, independent of the working directory) and `load_env_file()`. Variables already set (non-empty) in the real environment win; blank ones are filled from the file; a missing file is fine; `TRUSTBREAK_LOAD_DOTENV=0` disables loading. Values are never logged or returned.
+- `app/main.py`: calls `config.load_env_file()` at import, before configuration is read.
+- `requirements.txt`: added `python-dotenv>=1.0,<2.0`.
+- `tests/__init__.py`: sets `TRUSTBREAK_LOAD_DOTENV=0` so a developer's real `.env` never reaches the suite.
+
+### Tests
+- 9 new tests in `tests/test_env_loading.py` using a placeholder value only (precedence, blank fill, missing file, disable switch, any-cwd loading, `.env` git-ignored, example key empty). 338 total.
+
+## 0.7.2 (patch) - 2026-10-03 - Behaviour profile lookup investigation (no code change)
+
+Reported: TB-0003 showed "No behaviour profile exists for this sender". **Root cause: data, not code.** The stored `sender_name` of TB-0003 is `Jason` (hex `4A61736F6E`, role "Chief Executive Officer"), not `Arvind Rao`; the synthetic registry has no profile for Jason, so "no profile" is the correct, designed result. The seeded demo sender and the form's "Load demo scenario" both send exactly `Arvind Rao` and match `CEO-001` (verified end to end through the repository: `AMOUNT_ABOVE_BASELINE`, `NEW_BENEFICIARY`, `UNUSUAL_CHANNEL`).
+
+### Decision
+`get_profile_for_sender` was **not changed**. It already matches exact name or alias after casefold + whitespace collapse (leading/trailing, repeated, tabs, NBSP). Matching on role ("CEO") or loosening to substrings would let any CEO-titled stranger inherit another person's baseline, which is unsafe. Incidents have no sender-ID field, so ID-preferred matching is not possible without a schema change (out of scope).
+
+### Tests
+- 6 regression tests (`ProfileLookupRegressionTests`): exact, case-insensitive, surrounding whitespace, repeated/NBSP whitespace, unknown senders (incl. `Jason`, partial names, `Mr. Arvind Rao`, `CEO-001`, role text) stay unmatched, role is ignored.
+
 ## 0.7.1 (patch) - Gemini 503 / AFC diagnostic fix
 
 Gemini provider only; risk engine, behaviour, attachment analysis, case workflow, weights and the extraction schema are untouched.

@@ -59,7 +59,7 @@ Open <http://localhost:5173>. You should see the dashboard with one incident (th
 
 The incident detail page has a **Message Analysis** card (extracts authority, amount, beneficiary, urgency, secrecy, deadline and financial intent from the message; extraction only, not a fraud decision). It works with no setup in clearly labelled **demo mode** (rule-based, not AI).
 
-**Gemini (primary AI provider).** Copy `.env.example` to `.env`, set `GEMINI_API_KEY` (create one at https://aistudio.google.com/apikey), keep `TRUSTBREAK_AI_PROVIDER=gemini`, and export the variables before starting the backend (`set -a; source .env; set +a`). The model is `TRUSTBREAK_AI_MODEL` (default `gemini-3.8-flash`). Then `pip install -r requirements.txt` (adds `google-genai`).
+**Gemini (primary AI provider).** Copy `.env.example` to `.env`, set `GEMINI_API_KEY` (create one at https://aistudio.google.com/apikey), keep `TRUSTBREAK_AI_PROVIDER=gemini`, and put it in `backend/.env` (git-ignored; loaded automatically at startup, no export needed; variables already exported in your shell take precedence). The model is `TRUSTBREAK_AI_MODEL` (default `gemini-3.8-flash`). Then `pip install -r requirements.txt` (adds `google-genai`).
 
 | Variable | Meaning |
 |---|---|

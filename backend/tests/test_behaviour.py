@@ -153,5 +153,38 @@ class DemoRegistryTests(unittest.TestCase):
         self.assertIsNone(get_profile_for_sender(""))
 
 
+class ProfileLookupRegressionTests(unittest.TestCase):
+    """TB-0003 had sender_name 'Jason' (role CEO), which is correctly unmatched."""
+
+    def _cid(self, name):
+        profile = get_profile_for_sender(name)
+        return profile.employee_id if profile else None
+
+    def test_exact_match(self):
+        self.assertEqual(self._cid("Arvind Rao"), "CEO-001")
+
+    def test_case_insensitive_match(self):
+        for name in ("arvind rao", "ARVIND RAO", "aRvInD rAo"):
+            self.assertEqual(self._cid(name), "CEO-001", name)
+
+    def test_surrounding_whitespace(self):
+        self.assertEqual(self._cid("  Arvind Rao \t\n"), "CEO-001")
+
+    def test_repeated_internal_whitespace(self):
+        self.assertEqual(self._cid("Arvind    Rao"), "CEO-001")
+        self.assertEqual(self._cid("Arvind\u00a0 Rao"), "CEO-001")
+
+    def test_unknown_sender_remains_unmatched(self):
+        for name in ("Jason", "Arvind", "Rao", "Arvind Raoul", "Mr. Arvind Rao", "CEO-001", "Chief Executive Officer"):
+            self.assertIsNone(self._cid(name), name)
+        r = analyze_incident_behaviour("Jason", "WhatsApp", 1_850_000, "New Vendor X")
+        self.assertFalse(r["profile_found"])
+        self.assertEqual(r["anomalies"], [])
+
+    def test_matching_ignores_role(self):
+        """A CEO-titled stranger must never inherit the CEO profile."""
+        self.assertIsNone(self._cid("Jason"))
+
+
 if __name__ == "__main__":
     unittest.main()

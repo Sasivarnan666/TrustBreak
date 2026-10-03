@@ -1,6 +1,9 @@
 """FastAPI application entry point.
 
 Run from the backend/ folder:  uvicorn app.main:app --reload --port 8000
+From the project root:         uvicorn app.main:app --app-dir backend --reload --port 8000
+
+backend/.env is loaded automatically at import (see config.load_env_file).
 """
 
 import logging
@@ -17,6 +20,9 @@ from .errors import AppError, error_body
 from .routers import incidents
 
 logger = logging.getLogger("trustbreak")
+
+# Load backend/.env before anything reads configuration (path is independent of the cwd).
+config.load_env_file()
 
 _HTTP_ERROR_CODES = {404: "not_found", 405: "method_not_allowed"}
 

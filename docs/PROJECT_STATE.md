@@ -1,6 +1,6 @@
 # Project state
 
-_Last updated: 2026-10-03 · Version 0.7.1 (0.7.0 + **provider-agnostic AI adapter, Gemini primary**) · backend: 316 tests, 316 passed, 0 skipped (fresh venv with FastAPI/httpx) · frontend: `npm run build` passed · live Gemini call NOT run (no key)_
+_Last updated: 2026-10-03 · Version 0.7.3 (0.7.0 + provider-agnostic AI adapter, Gemini primary; 0.7.3 adds automatic `backend/.env` loading) · backend: 338 tests, 338 passed, 0 skipped (fresh venv with FastAPI/httpx) · frontend: `npm run build` passed · live Gemini call NOT run (no key)_
 
 ## What was implemented
 
@@ -12,6 +12,14 @@ A runnable full-stack foundation, flow: **React form → FastAPI → SQLite → 
 - Docs: README, ARCHITECTURE, ROADMAP, CHANGELOG, DEMO_SCENARIO, this file.
 
 _The two bullets above describe 0.1.0. Later versions add message extraction (0.2.0), behaviour signals (0.3.0), attachment analysis (0.4.0) and the on-demand Risk Correlation Engine (0.5.0, below). The **stored** placeholder analysis is unchanged; the risk assessment is computed on demand and not stored._
+
+## Note 0.7.3: backend/.env is loaded automatically (COMPLETED)
+
+Root cause of "GEMINI_API_KEY is not set": the backend never read `.env` (only the shell environment) and `python-dotenv` was missing. Now `app/main.py` calls `config.load_env_file()`, which reads `backend/.env` (path anchored to the file, so it works from `backend/` or the project root); real environment variables win, blank ones are filled, a missing file is fine, `TRUSTBREAK_LOAD_DOTENV=0` disables it. Dependency added: `python-dotenv`. Tests never read a real `.env`. Start: `uvicorn app.main:app --reload --port 8000` from `backend/`. A live Gemini call was not run here (no key in the authoring sandbox).
+
+## Note 0.7.2: TB-0003 "no behaviour profile" (RESOLVED as a data issue, no code change)
+
+TB-0003's stored sender is `Jason` (role CEO), not `Arvind Rao`, so no synthetic profile exists for it and the behaviour result is correct. Lookup is unchanged: exact name/alias after casefold + whitespace collapse, never by role or substring; unknown senders get no profile. To see the CEO scenario, create an incident with sender name `Arvind Rao` (e.g. "Load demo scenario"); there is no edit endpoint. If Jason is genuinely meant to be the CEO profile, that is an explicit alias decision for the owner (`aliases=("Jason",)` on `CEO-001`), not something to infer. Six regression tests added (329 tests in the system-Python run: Gemini-SDK tests fail only because `google-genai` is not installed there; run the full suite in your venv). Live re-run of TB-0003 and `npm run build` were not possible in the authoring sandbox (PyPI/npm 403).
 
 ## Change in 0.7.1: Provider-agnostic AI adapter, Gemini primary (COMPLETED, not a feature)
 
