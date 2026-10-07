@@ -13,6 +13,11 @@ Result `mode` (always labelled, never blurred):
   mock     deterministic demo rules (offline mode, no key, or the provider failed in `auto`)
   skipped  nothing to analyze (empty message); no extractor ran
 
+`analysis_state` is the same idea as one user-facing word: ai | fallback | mock | skipped.
+`fallback` = an AI provider was wanted but failed, so the deterministic extractor ran
+(`failure_kind` says why). In `ai`-only mode the same failure is an ExtractionError
+(shown as "unavailable"), never a silent substitute.
+
 `provider` says which backend produced the extraction; `is_fallback` is True only
 when an AI provider was wanted but the demo extractor was used instead.
 """
@@ -21,11 +26,21 @@ from dataclasses import dataclass
 from typing import Optional, Protocol
 
 from ... import config
-from .providers import PROVIDER_LABELS, CompletionProvider, MockProvider, ProviderError, build_provider
+from .providers import PROVIDER_LABELS, CompletionProvider, LLMProvider, MockProvider, ProviderError, build_provider
 from .providers.base import parse_model_reply  # noqa: F401 - re-exported for existing importers
 from .schema import ExtractionValidationError, MessageAnalysis, empty_extraction
+from .social_engineering import build_social_engineering, validate_ai_signals
 
 MAX_MESSAGE_CHARS = 5000  # same ceiling as the incident form
+
+# One short, secret-free hint per failure kind, appended to the fallback reason.
+FAILURE_HINTS = {
+    "quota_exhausted": "The provider's request limit is reached; the AI path will work again once it resets.",
+    "auth_error": "The provider rejected the API key; check the key and its permissions.",
+    "model_not_found": "The configured model name was not found; check TRUSTBREAK_AI_MODEL.",
+    "timeout": "The provider did not answer in time.",
+    "service_unavailable": "The provider is temporarily unavailable.",
+}
 
 MOCK_NOTES = [
     "Demo mode: these values come from simple keyword rules, NOT from an AI model.",
@@ -40,10 +55,11 @@ AI_NOTES = [
 class ExtractionError(Exception):
     """Analysis could not be produced. `code` is stable for API clients."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, failure_kind: Optional[str] = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.failure_kind = failure_kind
 
 
 class CompletionClient(Protocol):
@@ -83,6 +99,7 @@ def _mock_result(
     *,
     requested: str,
     is_fallback: bool,
+    failure_kind: Optional[str] = None,
 ) -> MessageAnalysis:
     return MessageAnalysis(
         mode="mock",
@@ -93,6 +110,10 @@ def _mock_result(
         provider="mock",
         requested_provider=requested,
         is_fallback=is_fallback,
+        analysis_state="fallback" if is_fallback else "mock",
+        failure_kind=failure_kind,
+        # Deterministic patterns only: labelled "fallback" when an AI provider was wanted but failed, else "rule".
+        social_engineering=build_social_engineering(text, ai_requested=is_fallback, ai_failed=is_fallback),
     )
 
 
@@ -120,6 +141,7 @@ def analyze_message(
             extraction=empty_extraction(),
             notes=["The message is empty, so nothing was analyzed."],
             requested_provider=requested,
+            analysis_state="skipped",
         )
     notes = []
     if len(text) > MAX_MESSAGE_CHARS:
@@ -140,37 +162,49 @@ def analyze_message(
     if provider is None:
         key_var = config.AI_KEY_ENV_VARS.get(settings.provider, "an API key")
         if settings.mode == "ai":
-            raise ExtractionError("ai_not_configured", f"AI mode is required but no API key is configured ({key_var}).")
+            raise ExtractionError("ai_not_configured", f"AI mode is required but no API key is configured ({key_var}).", "not_configured")
         return _mock_result(
             text,
             notes,
             f"No AI API key is configured ({key_var} is not set); {label} was not called. Using demo/mock extraction.",
             requested=settings.provider,
             is_fallback=True,
+            failure_kind="not_configured",
         )
 
+    raw_signals = None
     try:
-        extraction = provider.analyze_message(text)
+        if isinstance(provider, LLMProvider):
+            extraction, raw_signals = provider.analyze_message_with_signals(text)
+        else:
+            extraction = provider.analyze_message(text)
     except ProviderError as exc:
-        code, reason = "ai_unavailable", str(exc)
+        code, reason, kind = "ai_unavailable", str(exc), getattr(exc, "kind", "unexpected")
     except ExtractionValidationError as exc:
-        code, reason = "ai_invalid_response", f"AI reply was rejected by validation ({exc})"
+        code, reason, kind = "ai_invalid_response", f"AI reply was rejected by validation ({exc})", "invalid_response"
+    except Exception:  # noqa: BLE001 - a provider bug must never take the workflow down; text is never echoed
+        code, reason, kind = "ai_unavailable", "unexpected provider failure", "unexpected"
     else:
+        ai_signals, se_notes = validate_ai_signals(raw_signals, text)  # never raises; ungrounded items are dropped
         return MessageAnalysis(
+            social_engineering=build_social_engineering(text, ai_signals=ai_signals, ai_requested=True, extra_notes=se_notes),
             mode="ai",
             model=getattr(provider, "model", None),
             extraction=extraction,
             notes=AI_NOTES + notes,
             provider=provider.name,
             requested_provider=settings.provider,
+            analysis_state="ai",
         )
 
     if settings.mode == "ai":
-        raise ExtractionError(code, reason)
+        raise ExtractionError(code, reason, kind)
+    hint = FAILURE_HINTS.get(kind)
     return _mock_result(
         text,
         notes,
-        f"{label} analysis failed: {reason}. Using demo/mock extraction (not AI).",
+        f"{label} analysis failed: {reason}. " + (hint + " " if hint else "") + "Using demo/mock extraction (not AI).",
         requested=settings.provider,
         is_fallback=True,
+        failure_kind=kind,
     )

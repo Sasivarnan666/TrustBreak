@@ -127,15 +127,15 @@ class SingleSignalTests(unittest.TestCase):
 
     def test_only_urgency_is_low(self):
         r = correlate_risk(msg(urgency="high"), None, None)
-        self.assertEqual((r.risk_score, r.risk_level, r.recommended_action), (10, "LOW", "PROCEED"))
+        self.assertEqual((r.risk_score, r.risk_level, r.recommended_action), (8, "LOW", "PROCEED"))
         self.assertEqual(codes(r), {"HIGH_URGENCY"})
 
     def test_medium_urgency_earns_no_points(self):
         self.assertEqual(correlate_risk(msg(urgency="medium"), None, None).risk_score, 0)
 
-    def test_secrecy_and_financial_intent_are_ten_each(self):
+    def test_secrecy_is_ten_and_financial_intent_is_eight(self):  # 2.0 weights (was ten each)
         self.assertEqual(correlate_risk(msg(secrecy=True), None, None).risk_score, 10)
-        self.assertEqual(correlate_risk(msg(intent="payment_transfer"), None, None).risk_score, 10)
+        self.assertEqual(correlate_risk(msg(intent="payment_transfer"), None, None).risk_score, 8)
         self.assertEqual(correlate_risk(msg(intent="none"), None, None).risk_score, 0)
         self.assertEqual(correlate_risk(msg(intent="credential_or_otp_request"), None, None).risk_score, 0)
 
@@ -166,13 +166,13 @@ class SingleSignalTests(unittest.TestCase):
     def test_severity_follows_points(self):
         r = correlate_risk(msg(urgency="high"), beh(amount=True, channel=True), None)
         sev = {s.code: s.severity for s in r.signals}
-        self.assertEqual(sev, {"AMOUNT_ABOVE_BASELINE": "high", "UNUSUAL_CHANNEL": "medium", "HIGH_URGENCY": "medium"})
+        self.assertEqual(sev, {"AMOUNT_ABOVE_BASELINE": "high", "UNUSUAL_CHANNEL": "medium", "HIGH_URGENCY": "low"})
 
     def test_document_double_extension_path_traversal_and_other_high(self):
-        self.assertEqual(correlate_risk(None, None, att([f("document_with_executable_content", "medium")])).risk_score, 20)
-        self.assertEqual(correlate_risk(None, None, att([f("double_extension", entry="a.pdf.exe")])).risk_score, 15)
-        self.assertEqual(correlate_risk(None, None, att([f("path_traversal", entry="../x")])).risk_score, 15)
-        self.assertEqual(correlate_risk(None, None, att([f("content_type_mismatch", "high")])).risk_score, 10)
+        self.assertEqual(correlate_risk(None, None, att([f("document_with_executable_content", "medium")])).risk_score, 12)
+        self.assertEqual(correlate_risk(None, None, att([f("double_extension", entry="a.pdf.exe")])).risk_score, 12)
+        self.assertEqual(correlate_risk(None, None, att([f("path_traversal", entry="../x")])).risk_score, 12)
+        self.assertEqual(correlate_risk(None, None, att([f("content_type_mismatch", "high")])).risk_score, 8)
 
 
 # --------------------------------------------------------------------------- #
@@ -210,11 +210,11 @@ class AuthorityTests(unittest.TestCase):
 class CorrelationTests(unittest.TestCase):
     def test_multiple_independent_signals_are_high(self):
         r = correlate_risk(msg(urgency="high"), beh(amount=True, beneficiary=True), None)
-        self.assertEqual((r.risk_score, r.risk_level, r.recommended_action), (50, "HIGH", "VERIFY"))
+        self.assertEqual((r.risk_score, r.risk_level, r.recommended_action), (48, "HIGH", "VERIFY"))
 
     def test_many_signals_are_critical_hold_payment(self):
         r = correlate_risk(msg(urgency="high", secrecy=True), beh(amount=True, beneficiary=True, channel=True), None)
-        self.assertEqual((r.risk_score, r.risk_level, r.recommended_action), (75, "CRITICAL", "HOLD_PAYMENT"))
+        self.assertEqual((r.risk_score, r.risk_level, r.recommended_action), (73, "CRITICAL", "HOLD_PAYMENT"))
         self.assertTrue(r.trust_break_detected)
 
     def test_score_is_capped_but_raw_points_are_reported(self):
@@ -225,7 +225,10 @@ class CorrelationTests(unittest.TestCase):
                  f("path_traversal"), f("encrypted_entries", "high")], contains_executable=True),
             incident(),
         )
-        self.assertEqual(r.raw_points, 10 + 10 + 10 + 15 + 20 + 20 + 15 + 25 + 20 + 15 + 15 + 10)
+        # message 8+10+8 + authority mismatch 15 + behaviour 20+20+15 + attachment (25 + 12 masquerade + 12 path
+        # traversal = 49, limited to the 40-point attachment cap; the encrypted-entries finding is consolidated away)
+        self.assertEqual(r.raw_points, 8 + 10 + 8 + 15 + 20 + 20 + 15 + 40)
+        self.assertEqual(r.raw_points, sum(s.points for s in r.signals))
         self.assertEqual(r.risk_score, 100)
         self.assertTrue(any("capped" in n for n in r.notes))
 
@@ -234,7 +237,7 @@ class CorrelationTests(unittest.TestCase):
         r = correlate_risk(msg(urgency="high", secrecy=True, intent="payment_transfer"),
                            None, att([f("executable_inside_archive"), f("document_with_executable_content", "medium")],
                                      contains_executable=True))
-        self.assertEqual(r.risk_level, "CRITICAL")
+        self.assertEqual(r.risk_level, "HIGH")  # 2.0: 8+10+8 message + 25+12 attachment = 63
         self.assertFalse(r.trust_break_detected)
         self.assertEqual(r.headline, "Elevated risk indicators")
         # a single source, even if HIGH, is not a trust break
@@ -267,13 +270,19 @@ class CorrelationTests(unittest.TestCase):
 
     def test_documented_weights(self):
         expected = {
-            "HIGH_URGENCY": 10, "SECRECY_REQUESTED": 10, "FINANCIAL_TRANSFER_INTENT": 10, "AUTHORITY_MISMATCH": 15,
-            "AMOUNT_ABOVE_BASELINE": 20, "NEW_BENEFICIARY": 20, "UNUSUAL_CHANNEL": 15,
-            "EXECUTABLE_ATTACHMENT": 25, "DOCUMENT_WITH_EXECUTABLE": 20, "DOUBLE_EXTENSION": 15,
-            "PATH_TRAVERSAL": 15, "OTHER_HIGH_SEVERITY_ATTACHMENT_FINDING": 10,
+            "AUTHORITY_MISMATCH": 15, "UNUSUAL_CHANNEL": 15, "CHANNEL_DISTRIBUTION_ANOMALY": 6,
+            "AMOUNT_ABOVE_BASELINE": 20, "FINANCIAL_TRANSFER_INTENT": 8, "NEW_BENEFICIARY": 20,
+            "UNUSUAL_TIME": 6, "UNUSUAL_DAY": 4, "FREQUENCY_ANOMALY": 8, "VELOCITY_ANOMALY": 12,
+            "HIGH_URGENCY": 8, "URGENCY_PRESSURE": 8, "DEADLINE_PRESSURE": 8, "SECRECY_REQUESTED": 10,
+            "SECRECY_PRESSURE": 10, "ISOLATION_REQUEST": 8, "VERIFICATION_SUPPRESSION": 12, "FEAR_OR_THREAT": 8,
+            "PAYMENT_PRESSURE": 5, "CREDENTIAL_PRESSURE": 12, "IMPERSONATION_CUE": 8, "UNUSUAL_INSTRUCTION": 10,
+            "AUTHORITY_PRESSURE": 5, "EXECUTABLE_ATTACHMENT": 25, "RISKY_EXTENSION": 20,
+            "DOCUMENT_WITH_EXECUTABLE": 12, "DOUBLE_EXTENSION": 12, "PATH_TRAVERSAL": 12,
+            "OTHER_HIGH_SEVERITY_ATTACHMENT_FINDING": 8, "SUSPICIOUS_STRUCTURE": 5,
         }
-        self.assertEqual({r.code: r.points for r in rules.RULES}, expected)
-        self.assertEqual(len({r.category for r in rules.RULES}), len(rules.RULES))  # one rule per category
+        self.assertEqual(rules.RISK_WEIGHTS, expected)
+        self.assertEqual({r.code: r.weight for r in rules.RULES}, expected)
+        self.assertEqual(len(rules.RULES_BY_CODE), len(rules.RULES))  # one rule per code
 
 
 # --------------------------------------------------------------------------- #
@@ -304,7 +313,7 @@ class RobustnessTests(unittest.TestCase):
     def test_no_behaviour_profile(self):
         r = correlate_risk(msg(urgency="high"), beh(found=False), None)
         self.assertEqual(r.inputs["behaviour"]["status"], "not_evaluated")
-        self.assertEqual(r.risk_score, 10)
+        self.assertEqual(r.risk_score, 8)
         # flags without a found profile are ignored
         flagged = beh(amount=True, beneficiary=True, found=False)
         self.assertEqual(correlate_risk(None, flagged, None).risk_score, 0)
@@ -328,14 +337,16 @@ class RobustnessTests(unittest.TestCase):
         a = analyze_attachment("RBI_Statement.zip", zip_bytes(["Statement.pdf", "Update.exe", "helper.dll"]), "application/zip")
         r = correlate_risk(None, None, a)
         self.assertEqual(codes(r), {"EXECUTABLE_ATTACHMENT", "DOCUMENT_WITH_EXECUTABLE"})
-        self.assertEqual(r.risk_score, 45)
+        self.assertEqual(r.risk_score, 37)  # 2.0: executable 25 + document-looking archive 12 (was 25 + 20)
         exe = next(s for s in r.signals if s.code == "EXECUTABLE_ATTACHMENT")
         self.assertEqual(sorted(exe.details), ["Update.exe", "helper.dll"])
 
     def test_duplicate_double_extension_and_other_high_findings_count_once(self):
         r = correlate_risk(None, None, att([f("double_extension", entry="a.pdf.exe"), f("double_extension", entry="b.doc.scr"),
                                             f("content_type_mismatch", "high"), f("risky_extension", "high")]))
-        self.assertEqual(r.risk_score, 15 + 10)
+        # 2.0: double extension 12 (masquerade) + risky extension 20 (executable group) + other high finding 8
+        self.assertEqual(codes(r), {"DOUBLE_EXTENSION", "RISKY_EXTENSION", "OTHER_HIGH_SEVERITY_ATTACHMENT_FINDING"})
+        self.assertEqual(r.risk_score, 12 + 20 + 8)
 
     def test_unknown_signals_are_ignored(self):
         a = att([f("brand_new_finding", "low"), f("another_new_finding", "info"), f("odd", "medium")])
@@ -346,7 +357,7 @@ class RobustnessTests(unittest.TestCase):
         a = att([f("brand_new_finding", "high"), f("another_new_finding", "high")])
         r = correlate_risk(None, None, a)
         self.assertEqual(codes(r), {"OTHER_HIGH_SEVERITY_ATTACHMENT_FINDING"})
-        self.assertEqual(r.risk_score, 10)
+        self.assertEqual(r.risk_score, 8)
 
     def test_garbage_inputs_never_raise(self):
         for bad in ("text", 42, [], [1, 2], object(), {"extraction": "x"}, {"findings": "x", "archive": "yes"}):
@@ -358,7 +369,7 @@ class RobustnessTests(unittest.TestCase):
             def __init__(self, d): self.d = d
             def to_dict(self): return self.d
         r = correlate_risk(Boxed(msg(urgency="high")), Boxed(beh(beneficiary=True)), Boxed(att()))
-        self.assertEqual(r.risk_score, 30)
+        self.assertEqual(r.risk_score, 28)
 
     def test_deterministic(self):
         args = (msg(urgency="high", secrecy=True), beh(amount=True, channel=True), att([f("double_extension")]))
@@ -369,13 +380,19 @@ class RobustnessTests(unittest.TestCase):
     def test_result_shape_and_flags(self):
         d = correlate_risk(msg(urgency="high"), beh(amount=True), att()).to_dict()
         for key in ("risk_score", "risk_level", "recommended_action", "signals", "is_final_decision", "payment_blocked",
-                    "thresholds", "scoring_method", "disclaimer", "inputs", "category_points"):
+                    "thresholds", "scoring_method", "engine_version", "disclaimer", "inputs", "category_points"):
             self.assertIn(key, d)
-        self.assertEqual(set(d["signals"][0]), {"code", "category", "source", "severity", "points", "title", "message", "details"})
+        self.assertEqual(set(d["signals"][0]), {
+            "code", "category", "source", "severity", "points", "title", "message", "details", "why", "evidence", "confidence",
+            "group", "analyzer", "base_points", "capped", "related_signal_codes", "corroborating_sources"})
         self.assertFalse(d["payment_blocked"])
-        self.assertEqual(d["scoring_method"], "heuristic_points")
+        self.assertEqual(d["scoring_method"], "heuristic_points_v2")
+        self.assertEqual(d["engine_version"], rules.ENGINE_VERSION)
         self.assertIn("not proof of fraud", d["disclaimer"])
-        self.assertEqual(d["category_points"], {s["category"]: s["points"] for s in d["signals"]})
+        per_category = {}
+        for sig in d["signals"]:
+            per_category[sig["category"]] = per_category.get(sig["category"], 0) + sig["points"]
+        self.assertEqual(d["category_points"], per_category)
         self.assertEqual(d["risk_score"], sum(d["category_points"].values()))
 
 
@@ -388,22 +405,25 @@ class ScenarioTests(unittest.TestCase):
         r = assess_incident_risk(inc, ("RBI_Statement.zip", zip_bytes(["Statement.pdf", "Update.exe", "helper.dll"]), "application/zip"))
         self.assertEqual((r.risk_level, r.recommended_action), ("CRITICAL", "HOLD_PAYMENT"))
         self.assertEqual(r.risk_score, 100)
-        self.assertEqual(r.raw_points, 130)
+        self.assertGreater(r.raw_points, 100)  # the displayed score is capped; raw points are preserved
+        self.assertEqual(r.raw_points, sum(sig.points for sig in r.signals))
         self.assertTrue(r.trust_break_detected)
         self.assertEqual(r.headline, "TRUST BREAK DETECTED")
-        self.assertEqual(
-            codes(r),
-            {"AMOUNT_ABOVE_BASELINE", "NEW_BENEFICIARY", "UNUSUAL_CHANNEL", "HIGH_URGENCY", "SECRECY_REQUESTED",
-             "FINANCIAL_TRANSFER_INTENT", "EXECUTABLE_ATTACHMENT", "DOCUMENT_WITH_EXECUTABLE"},
-        )
-        self.assertEqual({s.source for s in r.signals}, {"message", "behaviour", "attachment"})
+        # No hard-coded score: the result emerges from real signals across every category.
+        self.assertTrue(
+            {"AMOUNT_ABOVE_BASELINE", "NEW_BENEFICIARY", "UNUSUAL_CHANNEL", "FINANCIAL_TRANSFER_INTENT",
+             "EXECUTABLE_ATTACHMENT", "DOCUMENT_WITH_EXECUTABLE"} <= codes(r))
+        self.assertTrue({"SECRECY_PRESSURE", "DEADLINE_PRESSURE", "VERIFICATION_SUPPRESSION"} <= codes(r))
+        self.assertEqual({s.analyzer for s in r.signals}, {"message", "behaviour", "attachment"})
+        self.assertTrue({"synthetic_baseline", "attachment_static"} <= {s.source for s in r.signals})
+        self.assertNotIn("AI", {s.source for s in r.signals})  # no key in the test environment: never labelled AI
         self.assertNotIn("hack", r.explanation.lower())
         self.assertNotIn("compromised", r.explanation.lower())
         self.assertFalse(r.payment_blocked)
 
     def test_ceo_demo_without_the_file_is_still_critical(self):
         r = assess_incident_risk(demo_incident())
-        self.assertEqual((r.risk_score, r.risk_level, r.recommended_action), (85, "CRITICAL", "HOLD_PAYMENT"))
+        self.assertEqual((r.risk_score, r.risk_level, r.recommended_action), (93, "CRITICAL", "HOLD_PAYMENT"))
         self.assertEqual(r.inputs["attachment"]["status"], "not_provided")
 
     def test_normal_payment_is_low_and_proceed(self):
@@ -412,8 +432,8 @@ class ScenarioTests(unittest.TestCase):
             payment=SimpleNamespace(amount=100_000, beneficiary_name="Vendor A"),
         )
         r = assess_incident_risk(inc)
-        # Only the ordinary "a payment is requested" point (+10); no behavioural anomaly, no urgency, no secrecy.
-        self.assertEqual((r.risk_score, r.risk_level, r.recommended_action), (10, "LOW", "PROCEED"))
+        # Only the ordinary "a payment is requested" point (+8); no behavioural anomaly, no urgency, no secrecy.
+        self.assertEqual((r.risk_score, r.risk_level, r.recommended_action), (8, "LOW", "PROCEED"))
         self.assertEqual(codes(r), {"FINANCIAL_TRANSFER_INTENT"})
         self.assertFalse(r.trust_break_detected)
 
@@ -421,7 +441,8 @@ class ScenarioTests(unittest.TestCase):
         inc = demo_incident(sender=SimpleNamespace(name="Someone Else", role="Manager"))
         r = assess_incident_risk(inc)
         self.assertEqual(r.inputs["behaviour"]["status"], "not_evaluated")
-        self.assertEqual({s.source for s in r.signals}, {"message"})
+        self.assertEqual({s.analyzer for s in r.signals}, {"message"})
+        self.assertNotIn("synthetic_baseline", {s.source for s in r.signals})
         self.assertFalse(r.trust_break_detected)
 
     def test_message_analysis_failure_is_reported_not_hidden(self):

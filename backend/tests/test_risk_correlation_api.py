@@ -77,7 +77,7 @@ class AnalyzeRiskApiTests(unittest.TestCase):
     def test_normal_payment_is_low(self):
         created = self.client.post("/api/incidents", json=NORMAL).json()["data"]
         data = self.client.post(f"/api/incidents/{created['id']}/analyze-risk").json()["data"]
-        self.assertEqual((data["risk_score"], data["risk_level"], data["recommended_action"]), (10, "LOW", "PROCEED"))
+        self.assertEqual((data["risk_score"], data["risk_level"], data["recommended_action"]), (8, "LOW", "PROCEED"))
         self.assertEqual([s["code"] for s in data["signals"]], ["FINANCIAL_TRANSFER_INTENT"])
 
     def test_invalid_file_uses_the_error_envelope(self):

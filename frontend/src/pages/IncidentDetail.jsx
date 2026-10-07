@@ -1,200 +1,191 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api/client.js";
+import { api, reportUrl } from "../api/client.js";
+import AssessmentHistoryCard from "../components/AssessmentHistoryCard.jsx";
 import AttachmentAnalysisCard from "../components/AttachmentAnalysisCard.jsx";
+import AttachmentIntelligenceCard from "../components/AttachmentIntelligenceCard.jsx";
 import BehaviourAnalysisCard from "../components/BehaviourAnalysisCard.jsx";
 import CaseReviewCard from "../components/CaseReviewCard.jsx";
+import CounterfactualCard from "../components/CounterfactualCard.jsx";
+import EvidenceChainCard from "../components/EvidenceChainCard.jsx";
+import IdentityContextCard from "../components/IdentityContextCard.jsx";
 import MessageAnalysisCard from "../components/MessageAnalysisCard.jsx";
+import MessageIntelligenceCard from "../components/MessageIntelligenceCard.jsx";
 import RiskAssessmentCard from "../components/RiskAssessmentCard.jsx";
 import { ErrorState, LoadingState } from "../components/States.jsx";
 import { CaseBadge, RiskBadge, Tag } from "../components/StatusBadge.jsx";
-import { ButtonLink, Card, DataRow } from "../components/ui.jsx";
+import TimelineCard from "../components/TimelineCard.jsx";
+import TrustGraphCard from "../components/TrustGraphCard.jsx";
+import VerificationCard from "../components/VerificationCard.jsx";
+import { ButtonLink, Card } from "../components/ui.jsx";
 import { useAsync } from "../hooks/useAsync.js";
-import { formatBytes, formatDateTime, formatINR } from "../lib/format.js";
+import { formatDateTime, formatINR } from "../lib/format.js";
 import { recommendedActionMeta } from "../lib/risk.js";
 
 function SummaryCell({ label, children, sub }) {
   return (
-    <div className="px-5 py-4">
+    <div className="px-4 py-3.5">
       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</p>
-      <p className="mt-1.5 text-lg font-semibold tracking-tight text-slate-900">{children}</p>
-      {sub && <div className="mt-1 text-xs text-slate-500">{sub}</div>}
+      <p className="mt-1 text-base font-semibold tracking-tight text-slate-900">{children}</p>
+      {sub && <div className="mt-0.5 text-xs text-slate-500">{sub}</div>}
     </div>
   );
 }
 
-/** Pure view of one incident. */
+function Section({ id, title, children }) {
+  return (
+    <section id={id} aria-label={title} className="scroll-mt-20">
+      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{title}</h2>
+      <div className="space-y-4">{children}</div>
+    </section>
+  );
+}
+
+/** Pure view of one incident (analyst workspace). */
 export function IncidentView({ incident }) {
-  const { sender, payment, attachment, analysis } = incident;
-  const isPlaceholder = analysis.mode === "placeholder";
-  // The persisted risk assessment (if any) is the incident's real security status; it updates here when re-run.
+  const { sender, payment, attachment } = incident;
   const [assessment, setAssessment] = useState(incident.risk_assessment ?? null);
   const action = recommendedActionMeta(assessment?.recommended_action);
-  const [attachmentFile, setAttachmentFile] = useState(null); // shared by Attachment Analysis and the risk assessment
-  // The human case workflow is separate state from the risk assessment: a decision never touches `assessment`.
-  const [caseState, setCaseState] = useState({
-    workflow_status: incident.workflow_status,
-    case_history: incident.case_history ?? [],
-  });
-  // After a conflict (e.g. the case was closed elsewhere) re-read the persisted workflow state in place.
+  const [attachmentFile, setAttachmentFile] = useState(null);
+  const [caseState, setCaseState] = useState({ workflow_status: incident.workflow_status, case_history: incident.case_history ?? [] });
+  const [history, setHistory] = useState(incident.assessment_history ?? []);
+  const [refresh, setRefresh] = useState(0); // bumps the timeline after verification / decision changes
+  const bump = () => setRefresh((n) => n + 1);
+
   const syncCase = () =>
-    api
-      .getIncident(incident.id)
-      .then((res) => setCaseState({ workflow_status: res.data.workflow_status, case_history: res.data.case_history }))
-      .catch(() => {});
+    api.getIncident(incident.id).then((res) => {
+      setCaseState({ workflow_status: res.data.workflow_status, case_history: res.data.case_history });
+      setAssessment(res.data.risk_assessment ?? null);
+      setHistory(res.data.assessment_history ?? []);
+      bump();
+    }).catch(() => {});
+  const assessmentId = assessment?.assessment_id ?? 0;
+  const graphState = useAsync((signal) => api.getTrustGraph(incident.id, signal), [incident.id, assessmentId]);
+  const scenarios = useAsync((signal) => (incident.scenario_id ? api.listScenarios(signal) : Promise.resolve(null)), [incident.scenario_id]);
+  const archive = scenarios.data?.data.find((s) => s.id === incident.scenario_id)?.attachment_entries ?? [];
+  const onAssessed = (next) => {
+    setAssessment(next);
+    api.listAssessments(incident.id).then((res) => setHistory(res.data)).catch(() => {});
+    bump();
+  };
+  const signals = assessment?.signals ?? [];
+  const dims = new Set(signals.filter((s) => s.points > 0).map((s) => s.category));
+  const dimCount = assessment && assessment.risk_level !== "LOW" ? dims.size : 0;
 
   return (
     <>
-      <nav className="mb-4 text-xs text-slate-500" aria-label="Breadcrumb">
-        <Link to="/incidents" className="hover:text-slate-800 hover:underline">
-          Incidents
-        </Link>
+      <nav className="mb-3 text-xs text-slate-500 print:hidden" aria-label="Breadcrumb">
+        <Link to="/incidents" className="hover:text-slate-800 hover:underline">Incidents</Link>
         <span className="mx-1.5">/</span>
         <span className="font-mono text-slate-700">{incident.reference}</span>
       </nav>
 
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{incident.title}</h1>
-          <p className="mt-1 text-sm text-slate-600">
-            <span className="font-mono">{incident.reference}</span> · Reported {formatDateTime(incident.created_at)}
-          </p>
-        </div>
-        <div className="flex flex-col items-start gap-1 sm:items-end" data-testid="incident-status">
-          <div className="flex flex-wrap items-center gap-2">
-            <RiskBadge level={assessment?.risk_level} size="lg" />
-            <CaseBadge status={caseState.workflow_status} size="lg" />
+      {incident.is_synthetic && (
+        <p className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900" data-testid="synthetic-banner">
+          DEMO MODE · synthetic scenario “{incident.scenario_id}”. Fictional data, not a real incident.
+        </p>
+      )}
+
+      {/* ---- Incident header ---- */}
+      <header className="rounded-lg border border-slate-200 bg-white p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="font-mono text-sm font-semibold text-slate-600">{incident.reference}</p>
+            <h1 className="mt-0.5 text-xl font-semibold tracking-tight text-slate-900">{incident.title}</h1>
+            <p className="mt-1 text-xs text-slate-500">Reported {formatDateTime(incident.created_at)}</p>
           </div>
-          <span className="text-xs font-medium text-slate-600">
-            {assessment ? `${action?.icon ?? ""} ${assessment.recommended_action_label}` : "No risk assessment yet"}
-          </span>
-          <span className="text-[11px] text-slate-500">Risk = TrustBreak assessment · Case = analyst review</span>
+          <div className="flex flex-col items-start gap-2 sm:items-end" data-testid="incident-status">
+            <div className="flex flex-wrap items-center gap-2">
+              {assessment && <span className="text-3xl font-semibold tabular-nums text-slate-900">{assessment.risk_score}</span>}
+              <RiskBadge level={assessment?.risk_level} size="lg" />
+              <CaseBadge status={caseState.workflow_status} size="lg" />
+            </div>
+            <p className="text-sm font-semibold uppercase tracking-wide text-slate-800">
+              {assessment ? (assessment.trust_break_detected ? `Trust break detected · ${action?.label ?? ""}` : action?.label) : "No risk assessment yet"}
+            </p>
+            <p className="text-[11px] text-slate-500">System assessment ≠ human case decision</p>
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2 print:hidden">
+          <a href={reportUrl(incident.id)} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-800 hover:bg-slate-50">
+            EXPORT INCIDENT REPORT
+          </a>
         </div>
       </header>
 
-      <div className="grid divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-4 lg:divide-x">
-        <SummaryCell label="Amount requested" sub="Indian rupees">
-          <span className="tabular-nums">{formatINR(payment.amount)}</span>
+      {/* ---- Trust break summary ---- */}
+      <section aria-label="Trust break summary" className="mt-4 grid divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-4 lg:divide-x xl:grid-cols-4">
+        <SummaryCell label="Prototype risk score" sub={assessment ? `${assessment.raw_points} raw points · not a probability` : "Run the assessment"}>
+          {assessment ? `${assessment.risk_score} · ${assessment.risk_level}` : "—"}
         </SummaryCell>
-        <SummaryCell label="Beneficiary" sub={payment.beneficiary_is_new ? <Tag tone="amber">New beneficiary</Tag> : "Existing beneficiary"}>
-          {payment.beneficiary_name}
+        <SummaryCell label="Recommended action" sub={assessment ? `${dimCount} trust dimension${dimCount === 1 ? "" : "s"} violated · ${signals.length} signals` : undefined}>
+          {assessment ? action?.label : "—"}
         </SummaryCell>
-        <SummaryCell label="Channel" sub="How the request arrived">
-          {incident.channel}
+        <SummaryCell label="Amount / beneficiary" sub={payment.beneficiary_is_new ? <Tag tone="amber">New beneficiary</Tag> : "Existing beneficiary"}>
+          <span className="tabular-nums">{formatINR(payment.amount)}</span> → {payment.beneficiary_name}
         </SummaryCell>
-        <SummaryCell label="Sender" sub={sender.known ? <Tag tone="brand">Known contact</Tag> : <Tag>Not a known contact</Tag>}>
-          {sender.name}
+        <SummaryCell label="Sender / channel" sub={sender.identity_id ? <span className="font-mono">{sender.identity_id}</span> : <Tag>No trusted identity</Tag>}>
+          {sender.name} · {incident.channel}
         </SummaryCell>
-      </div>
+      </section>
 
-      <div className="mt-6">
-        <RiskAssessmentCard
-          incidentId={incident.id}
-          attachmentFile={attachmentFile}
-          hasAttachment={Boolean(attachment)}
-          assessment={assessment}
-          onAssessed={setAssessment}
-        />
-      </div>
+      <div className="mt-6 grid gap-6 xl:grid-cols-3">
+        <div className="space-y-8 xl:col-span-2">
+          <Section id="why" title="Why did trust break?">
+            <EvidenceChainCard graph={graphState.data?.data} assessment={assessment} />
+            {graphState.data && (
+              <details className="rounded-lg border border-slate-200 bg-white">
+                <summary className="cursor-pointer select-none px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Evidence graph and identity context</summary>
+                <div className="space-y-4 border-t border-slate-200 p-4">
+                  <IdentityContextCard graph={graphState.data.data} />
+                  <TrustGraphCard graph={graphState.data.data} />
+                </div>
+              </details>
+            )}
+            {graphState.error && <p role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">The evidence graph could not be loaded ({graphState.error.message}).</p>}
+          </Section>
 
-      <div className="mt-6">
-        <CaseReviewCard
-          incidentId={incident.id}
-          assessment={assessment}
-          caseState={caseState}
-          onCaseChange={(state) =>
-            setCaseState({ workflow_status: state.workflow_status, case_history: state.case_history })
-          }
-          onReload={syncCase}
-        />
-      </div>
+          <Section id="risk" title="Risk breakdown">
+            <RiskAssessmentCard incidentId={incident.id} attachmentFile={attachmentFile} hasAttachment={Boolean(attachment)} assessment={assessment} onAssessed={onAssessed} />
+          </Section>
 
-      {!assessment && (
-        <section aria-labelledby="intake-note" className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 id="intake-note" className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-600">
-              Intake note
-            </h2>
-            {isPlaceholder && <Tag>Placeholder · not a risk assessment</Tag>}
-          </div>
-          <p className="mt-2 text-sm leading-relaxed text-slate-800">{analysis.recommended_action}</p>
-          <p className="mt-2 text-xs leading-relaxed text-slate-600">{analysis.summary}</p>
-        </section>
-      )}
+          <Section id="counterfactuals" title="Counterfactuals">
+            <CounterfactualCard incidentId={incident.id} assessmentId={assessmentId} />
+          </Section>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
-          <Card title="Message">
-            <blockquote className="whitespace-pre-wrap border-l-2 border-slate-300 pl-4 text-sm leading-relaxed text-slate-800">
-              {incident.message}
-            </blockquote>
-          </Card>
+          <Section id="message" title="Message intelligence">
+            <MessageIntelligenceCard message={incident.message} signals={signals} />
+            <MessageAnalysisCard incidentId={incident.id} />
+            <BehaviourAnalysisCard incidentId={incident.id} />
+          </Section>
 
-          <MessageAnalysisCard incidentId={incident.id} />
-
-          <BehaviourAnalysisCard incidentId={incident.id} />
-
-          {attachment && <AttachmentAnalysisCard incidentId={incident.id} attachmentName={attachment.name} onFileChange={setAttachmentFile} />}
-
-          <Card title="Evidence" padded={false} aside={<span className="text-xs text-slate-500">{analysis.evidence.length} items</span>}>
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
-                <tr>
-                  <th className="px-5 py-2.5">Item</th>
-                  <th className="px-3 py-2.5">Recorded value</th>
-                  <th className="px-5 py-2.5">Source</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {analysis.evidence.map((item) => (
-                  <tr key={item.label}>
-                    <td className="whitespace-nowrap px-5 py-3 text-slate-500">{item.label}</td>
-                    <td className="px-3 py-3 font-medium text-slate-900">{item.value}</td>
-                    <td className="px-5 py-3">
-                      <Tag>{item.source}</Tag>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Card>
+          {attachment && (
+            <Section id="attachment" title="Attachment intelligence">
+              <AttachmentIntelligenceCard attachment={attachment} signals={signals} archiveEntries={archive} />
+              <AttachmentAnalysisCard incidentId={incident.id} attachmentName={attachment.name} onFileChange={setAttachmentFile} />
+            </Section>
+          )}
         </div>
 
-        <div className="space-y-6">
-          <Card title="Sender">
-            <dl className="divide-y divide-slate-100">
-              <DataRow label="Name">{sender.name}</DataRow>
-              <DataRow label="Role">{sender.role}</DataRow>
-              <DataRow label="Status">{sender.known ? "Known contact" : "Not a known contact"}</DataRow>
-              <DataRow label="Contact">{sender.contact ? <span className="font-mono text-[13px]">{sender.contact}</span> : "—"}</DataRow>
-            </dl>
-          </Card>
-
-          <Card title="Payment">
-            <dl className="divide-y divide-slate-100">
-              <DataRow label="Amount">
-                <span className="tabular-nums">{formatINR(payment.amount)}</span>
-              </DataRow>
-              <DataRow label="Beneficiary">{payment.beneficiary_name}</DataRow>
-              <DataRow label="Beneficiary status">{payment.beneficiary_is_new ? "New" : "Existing"}</DataRow>
-              <DataRow label="Channel">{incident.channel}</DataRow>
-            </dl>
-          </Card>
-
-          <Card title="Attachment">
-            {attachment ? (
-              <dl className="divide-y divide-slate-100">
-                <DataRow label="File name">
-                  <span className="font-mono text-[13px]">{attachment.name}</span>
-                </DataRow>
-                <DataRow label="Type">{attachment.content_type ?? "—"}</DataRow>
-                <DataRow label="Size">{formatBytes(attachment.size_bytes)}</DataRow>
-              </dl>
-            ) : (
-              <p className="text-sm text-slate-600">No attachment was reported with this request.</p>
-            )}
-            <p className="mt-3 text-xs text-slate-500">Metadata only. The file itself is never stored; use Attachment Analysis to inspect a copy.</p>
-          </Card>
+        <div className="space-y-8">
+          <Section id="verification" title="Verification">
+            <VerificationCard incidentId={incident.id} assessmentId={assessmentId} onChanged={bump} />
+          </Section>
+          <Section id="timeline" title="Forensic timeline">
+            <TimelineCard incidentId={incident.id} refreshKey={refresh + assessmentId} />
+          </Section>
+          <Section id="history" title="Assessment history">
+            <AssessmentHistoryCard incidentId={incident.id} history={history} caseHistory={caseState.case_history} />
+          </Section>
+          <Section id="decision" title="Analyst decision">
+            <CaseReviewCard
+              incidentId={incident.id}
+              assessment={assessment}
+              caseState={caseState}
+              onCaseChange={(state) => { setCaseState({ workflow_status: state.workflow_status, case_history: state.case_history }); bump(); }}
+              onReload={syncCase}
+            />
+          </Section>
         </div>
       </div>
     </>
@@ -204,22 +195,15 @@ export function IncidentView({ incident }) {
 export default function IncidentDetail() {
   const { id } = useParams();
   const { data, error, loading, reload } = useAsync((signal) => api.getIncident(id, signal), [id]);
-
   if (loading) return <LoadingState label="Loading incident…" rows={6} />;
   if (error) {
     const notFound = error.status === 404;
     return (
       <div className="space-y-4">
-        <ErrorState
-          error={error}
-          onRetry={notFound ? undefined : reload}
-          title={notFound ? "Incident not found" : "Could not load this incident"}
-        />
-        <ButtonLink to="/incidents" variant="secondary">
-          Back to incidents
-        </ButtonLink>
+        <ErrorState error={error} onRetry={notFound ? undefined : reload} title={notFound ? "Incident not found" : "Could not load this incident"} />
+        <ButtonLink to="/incidents" variant="secondary">Back to incidents</ButtonLink>
       </div>
     );
   }
-  return <IncidentView incident={data.data} />;
+  return <IncidentView key={data.data.id} incident={data.data} />;
 }

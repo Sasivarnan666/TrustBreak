@@ -18,6 +18,7 @@ from .schemas import (
 from . import case_repository, risk_repository
 from .services import case_workflow
 from .services.analysis import analyze_incident
+from .services.identity import resolve_identity
 from .services.risk_correlation.incident_status import NOT_ASSESSED, label_for_status
 
 
@@ -33,8 +34,9 @@ def reference_for(incident_id: int) -> str:
     return _reference(incident_id)
 
 
-def create_incident(conn: sqlite3.Connection, payload: IncidentCreate) -> Incident:
+def create_incident(conn: sqlite3.Connection, payload: IncidentCreate, scenario_id: Optional[str] = None) -> Incident:
     analysis = analyze_incident(payload)
+    identity, identity_source = resolve_identity(payload.sender_identity_id, payload.sender_name)
     created_at = _now()
     title = f"Payment request from {payload.sender_name} via {payload.channel}"
     with conn:  # commits on success, rolls back on error
@@ -43,12 +45,14 @@ def create_incident(conn: sqlite3.Connection, payload: IncidentCreate) -> Incide
             INSERT INTO incidents (
                 created_at, title,
                 sender_name, sender_role, sender_known, sender_contact,
+                sender_identity_id, sender_identity_source,
                 channel,
                 amount, currency, beneficiary_name, beneficiary_is_new,
                 message,
                 attachment_name, attachment_size_bytes, attachment_content_type,
-                analysis_mode, risk_status, analysis_summary, recommended_action, evidence_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'INR', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                analysis_mode, risk_status, analysis_summary, recommended_action, evidence_json,
+                received_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'INR', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 created_at,
@@ -57,6 +61,8 @@ def create_incident(conn: sqlite3.Connection, payload: IncidentCreate) -> Incide
                 payload.sender_role,
                 int(payload.sender_known),
                 payload.sender_contact,
+                identity.identity_id if identity else None,
+                identity_source,
                 payload.channel,
                 payload.amount,
                 payload.beneficiary_name,
@@ -70,9 +76,12 @@ def create_incident(conn: sqlite3.Connection, payload: IncidentCreate) -> Incide
                 analysis.summary,
                 analysis.recommended_action,
                 json.dumps([item.model_dump() for item in analysis.evidence]),
+                payload.received_at,
             ),
         )
         new_id = cursor.lastrowid
+        if scenario_id:
+            conn.execute("UPDATE incidents SET scenario_id = ? WHERE id = ?", (scenario_id, new_id))
         case_workflow.open_case(conn, new_id, created_at)  # same transaction: no incident without a case
     created = get_incident(conn, new_id)
     assert created is not None  # just inserted
@@ -87,6 +96,7 @@ def get_incident(conn: sqlite3.Connection, incident_id: int) -> Optional[Inciden
     assessment = risk_repository.get_latest_risk_assessment(conn, incident_id)
     if assessment is not None:
         incident.risk_assessment = assessment
+        incident.assessment_history = risk_repository.list_assessment_history(conn, incident_id)
         incident.incident_status = assessment.incident_status
         incident.incident_status_label = assessment.incident_status_label
     # Workflow state lives in its own table; the assessment above is left exactly as stored.
@@ -108,7 +118,7 @@ def list_incidents(conn: sqlite3.Connection, limit: int = 100, offset: int = 0) 
                r.trust_break_detected AS r_trust_break, r.assessed_at AS r_assessed_at,
                {case_repository.STATUS_SQL} AS workflow_status
         FROM incidents i
-        LEFT JOIN risk_assessments r ON r.incident_id = i.id
+        LEFT JOIN latest_risk_assessments r ON r.incident_id = i.id
         ORDER BY i.id DESC LIMIT ? OFFSET ?
         """,
         (limit, offset),
@@ -148,6 +158,8 @@ def _row_to_summary(row: sqlite3.Row) -> IncidentSummary:
         beneficiary_is_new=bool(row["beneficiary_is_new"]),
         has_attachment=bool(row["attachment_name"]),
         risk_status=row["risk_status"],
+        scenario_id=row["scenario_id"],
+        is_synthetic=bool(row["scenario_id"]),
     )
 
 
@@ -163,12 +175,17 @@ def _row_to_incident(row: sqlite3.Row) -> Incident:
         id=row["id"],
         reference=_reference(row["id"]),
         created_at=row["created_at"],
+        received_at=row["received_at"],
+        scenario_id=row["scenario_id"],
+        is_synthetic=bool(row["scenario_id"]),
         title=row["title"],
         sender=Sender(
             name=row["sender_name"],
             role=row["sender_role"],
             known=bool(row["sender_known"]),
             contact=row["sender_contact"],
+            identity_id=row["sender_identity_id"],
+            identity_source=row["sender_identity_source"] or "none",
         ),
         channel=row["channel"],
         payment=Payment(
@@ -187,3 +204,18 @@ def _row_to_incident(row: sqlite3.Row) -> Incident:
             evidence=[EvidenceItem(**item) for item in json.loads(row["evidence_json"])],
         ),
     )
+
+
+def list_prior_request_times(conn: sqlite3.Connection, identity_id: Optional[str], before_id: int) -> Optional[tuple]:
+    """received_at of EARLIER incidents (lower id) linked to the same trusted identity.
+
+    Only rows with an explicit received_at count (the wall-clock created_at is when a record was typed in, not
+    when a request arrived). None when the incident has no linked identity (history unavailable, not "zero").
+    These are real stored values - nothing is synthesized.
+    """
+    if not identity_id:
+        return None
+    rows = conn.execute(
+        "SELECT received_at FROM incidents WHERE sender_identity_id = ? AND id < ? AND received_at IS NOT NULL ORDER BY id", (identity_id, before_id)
+    ).fetchall()
+    return tuple(r["received_at"] for r in rows)

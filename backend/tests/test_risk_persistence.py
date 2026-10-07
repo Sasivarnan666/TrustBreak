@@ -122,7 +122,7 @@ class RepositoryTests(Base):
             risk_repository.save_risk_assessment(self.conn, iid, bad)
         self.assertIsNone(risk_repository.get_latest_risk_assessment(self.conn, iid))
 
-    def test_repeated_assessments_return_the_latest_and_keep_one_row(self):
+    def test_repeated_assessments_return_the_latest_and_keep_every_version(self):
         iid = self.make()
         risk_repository.save_risk_assessment(self.conn, iid, fake_result("LOW", 10), assessed_at="2026-10-03T10:00:00Z")
         risk_repository.save_risk_assessment(self.conn, iid, fake_result("CRITICAL", 100, trust_break_detected=True),
@@ -130,7 +130,11 @@ class RepositoryTests(Base):
         got = risk_repository.get_latest_risk_assessment(self.conn, iid)
         self.assertEqual((got.risk_level, got.incident_status, got.assessed_at), ("CRITICAL", "hold_payment", "2026-10-03T11:00:00Z"))
         self.assertTrue(got.trust_break_detected)
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM risk_assessments").fetchone()[0], 1)
+        # v0.8.0: nothing is overwritten - both versions remain, v1 exactly as first stored.
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM risk_assessment_history").fetchone()[0], 2)
+        self.assertEqual((got.version_number, got.is_latest), (2, True))
+        first = risk_repository.get_assessment_version(self.conn, iid, 1)
+        self.assertEqual((first.risk_level, first.risk_score, first.assessed_at, first.is_latest), ("LOW", 10, "2026-10-03T10:00:00Z", False))
 
     def test_assessments_are_per_incident(self):
         a, b = self.make(), self.make()

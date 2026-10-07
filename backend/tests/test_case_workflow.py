@@ -111,7 +111,8 @@ class DecisionPersistenceTests(Base):
         self.assertEqual(
             set(repository.get_incident(self.conn, inc.id).case_history[0].model_dump()),
             {"previous_status", "new_status", "new_status_label", "decision", "decision_label", "reason",
-             "analyst_name", "created_at"},
+             "analyst_name", "created_at", "assessment_id", "assessment_number", "assessment_risk_score",
+             "assessment_risk_level"},
         )
 
     def test_decisions_are_per_incident(self):
@@ -264,7 +265,8 @@ class RequestSchemaTests(unittest.TestCase):
 
 class RiskSeparationTests(Base):
     def snapshot(self, iid):
-        return dict(self.conn.execute("SELECT * FROM risk_assessments WHERE incident_id = ?", (iid,)).fetchone())
+        # v0.8.0: assessments live in the append-only history; compare the whole history, not just the latest row.
+        return [dict(r) for r in self.conn.execute("SELECT * FROM risk_assessment_history WHERE incident_id = ? ORDER BY id", (iid,))]
 
     def test_decision_leaves_the_risk_assessment_byte_for_byte_unchanged(self):
         inc = self.make()

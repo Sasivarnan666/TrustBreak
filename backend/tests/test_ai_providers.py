@@ -29,7 +29,7 @@ from app.services.message_analysis.providers import (
     build_provider,
 )
 from app.services.message_analysis.providers import gemini as gemini_module
-from app.services.message_analysis.schema import extraction_json_schema
+from app.services.message_analysis.schema import extraction_json_schema, response_json_schema
 from app.services.message_analysis.service import AISettings, load_settings
 
 from .test_message_analysis import CEO_MESSAGE, good_reply
@@ -216,7 +216,8 @@ class GeminiValidResponseTests(CleanEnv):
         self.assertIn("BEGIN MSG-", call["contents"])  # delimited untrusted data
         self.assertNotIn(CEO_MESSAGE, cfg.system_instruction)  # message never reaches the system prompt
         self.assertEqual(cfg.response_mime_type, "application/json")
-        self.assertEqual(cfg.response_json_schema, extraction_json_schema())
+        # 0.11.0: the provider schema is the extraction schema plus the OPTIONAL social-engineering list.
+        self.assertEqual(cfg.response_json_schema, response_json_schema())
         self.assertIsNone(cfg.tools)
         self.assertIsNone(cfg.tool_config)
         self.assertEqual(cfg.temperature, 0)
@@ -511,8 +512,16 @@ class RiskEngineIndependenceTests(CleanEnv):
         gemini = MessageAnalysis(mode="ai", model="m", extraction=extraction, provider="gemini", requested_provider="gemini")
         demo = MessageAnalysis(mode="mock", model=None, extraction=extraction, provider="mock", requested_provider="mock")
         a, b = self.assess(gemini), self.assess(demo)
-        for key in ("risk_score", "risk_level", "recommended_action", "signals", "category_points"):
+        for key in ("risk_score", "risk_level", "recommended_action", "category_points"):
             self.assertEqual(a.get(key), b.get(key), key)
+        # Same codes and points regardless of the extractor; only the PROVENANCE label differs (AI vs rule).
+        def scored(r):
+            return [(s["code"], s["category"], s["points"]) for s in r["signals"]]
+        self.assertEqual(scored(a), scored(b))
+        ai_flags = {s["code"]: s["source"] for s in a["signals"] if s["analyzer"] == "message"}
+        rule_flags = {s["code"]: s["source"] for s in b["signals"] if s["analyzer"] == "message"}
+        self.assertTrue(ai_flags and set(ai_flags.values()) <= {"AI", "rule"})
+        self.assertNotIn("AI", set(rule_flags.values()))  # deterministic mock output is never labelled AI
         self.assertIn(a["risk_level"], ("HIGH", "CRITICAL"))
 
     def test_engine_and_workflow_do_not_import_providers(self):

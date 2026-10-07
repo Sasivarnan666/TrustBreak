@@ -4,8 +4,10 @@ import { EmptyState } from "./components/States.jsx";
 import { ButtonLink } from "./components/ui.jsx";
 import CreateIncident from "./pages/CreateIncident.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
+import Identities from "./pages/Identities.jsx";
 import IncidentDetail from "./pages/IncidentDetail.jsx";
 import IncidentList from "./pages/IncidentList.jsx";
+import Scenarios from "./pages/Scenarios.jsx";
 
 function NotFound() {
   return (
@@ -25,6 +27,8 @@ export default function App() {
         <Route path="incidents" element={<IncidentList />} />
         <Route path="incidents/new" element={<CreateIncident />} />
         <Route path="incidents/:id" element={<IncidentDetail />} />
+        <Route path="scenarios" element={<Scenarios />} />
+        <Route path="identities" element={<Identities />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

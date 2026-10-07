@@ -15,16 +15,52 @@ import re
 from typing import Optional, Protocol
 
 from .. import prompt
-from ..schema import ExtractionValidationError, MessageExtraction, validate_extraction
+from ..schema import SOCIAL_SIGNALS_KEY, ExtractionValidationError, MessageExtraction, validate_extraction
 
 MAX_MODEL_REPLY_CHARS = 20_000
+
+
+# Stable, machine-readable failure categories (no secrets, no provider text).
+FAILURE_KINDS = (
+    "quota_exhausted",  # HTTP 429: free-tier / rate limit reached
+    "auth_error",  # HTTP 401/403: key missing permission or rejected
+    "model_not_found",  # HTTP 404: model name retired or wrong
+    "timeout",
+    "service_unavailable",  # HTTP 5xx after the SDK's bounded retries
+    "unreachable",  # network / DNS / connection failure
+    "http_error",  # any other HTTP status
+    "empty_response",  # empty, blocked or filtered reply
+    "invalid_response",  # reply failed JSON / schema validation
+    "not_configured",  # no API key
+    "sdk_missing",
+    "unexpected",  # anything else; text is never echoed
+)
+
+
+def kind_for_status(code: int) -> str:
+    if code == 429:
+        return "quota_exhausted"
+    if code in (401, 403):
+        return "auth_error"
+    if code == 404:
+        return "model_not_found"
+    if code in (408, 504):
+        return "timeout"
+    if code >= 500:
+        return "service_unavailable"
+    return "http_error"
 
 
 class ProviderError(Exception):
     """The AI provider could not be reached or returned an unusable reply.
 
     Messages must never contain API keys, request bodies or raw model output.
+    `kind` is one of FAILURE_KINDS.
     """
+
+    def __init__(self, message: str, kind: str = "unexpected") -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 class MessageProvider(Protocol):
@@ -59,10 +95,17 @@ class LLMProvider:
     def complete(self, system: str, user: str) -> str:  # pragma: no cover - interface
         raise NotImplementedError
 
-    def analyze_message(self, text: str) -> MessageExtraction:
+    def analyze_message_with_signals(self, text: str) -> tuple:
+        """Return (validated extraction, RAW optional social-engineering list). The list is untrusted: the service
+        validates and grounds it against the message. The extraction itself is validated exactly as before."""
         delimiter = prompt.new_delimiter()
         reply = self.complete(prompt.SYSTEM_PROMPT, prompt.build_user_content(text, delimiter))
-        return validate_extraction(parse_model_reply(reply))
+        parsed = parse_model_reply(reply)
+        raw_signals = parsed.pop(SOCIAL_SIGNALS_KEY, None)
+        return validate_extraction(parsed), raw_signals
+
+    def analyze_message(self, text: str) -> MessageExtraction:
+        return self.analyze_message_with_signals(text)[0]
 
 
 class CompletionProvider(LLMProvider):

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client.js";
 import { Tag } from "./StatusBadge.jsx";
+import SocialEngineeringIndicators from "./SocialEngineeringIndicators.jsx";
 import { Button, Card, DataRow } from "./ui.jsx";
 
 const INTENT_LABELS = {
@@ -20,6 +21,21 @@ function formatAmount(amount, currency) {
   return currency ? `${currency} ${n}` : n;
 }
 
+const FAILURE_LABELS = {
+  quota_exhausted: "Request limit reached (HTTP 429)",
+  auth_error: "API key rejected",
+  model_not_found: "Model not found",
+  timeout: "Timed out",
+  service_unavailable: "Provider temporarily unavailable",
+  unreachable: "Provider unreachable",
+  http_error: "Provider returned an error",
+  empty_response: "Empty or blocked reply",
+  invalid_response: "Reply failed validation",
+  not_configured: "No API key configured",
+  sdk_missing: "AI library not installed",
+  unexpected: "Unexpected provider failure",
+};
+
 const PROVIDER_LABELS = { gemini: "Gemini", anthropic: "Anthropic", mock: "Demo" };
 const providerLabel = (p) => PROVIDER_LABELS[p] ?? (p ? p.charAt(0).toUpperCase() + p.slice(1) : "AI");
 
@@ -32,15 +48,18 @@ export function MessageAnalysisView({ analysis }) {
   const isAi = mode === "ai";
   const isMock = mode === "mock";
   // An AI provider was wanted but the rule-based demo extractor ran instead.
-  const isFallback = isMock && analysis.is_fallback === true;
+  const isFallback = isMock && (analysis.analysis_state === "fallback" || analysis.is_fallback === true);
 
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {isAi && <Tag tone="brand">AI analysis · {providerLabel(analysis.provider)}</Tag>}
         {isAi && analysis.model && <Tag>{analysis.model}</Tag>}
-        {isFallback && <Tag tone="amber">{providerLabel(analysis.requested_provider)} unavailable · using demo extraction</Tag>}
+        {isFallback && (
+          <Tag tone="amber">{providerLabel(analysis.requested_provider)} unavailable — deterministic fallback used</Tag>
+        )}
         {isFallback && <Tag>Rule-based, not AI</Tag>}
+        {isFallback && analysis.failure_kind && <Tag>{FAILURE_LABELS[analysis.failure_kind] ?? analysis.failure_kind}</Tag>}
         {isMock && !isFallback && <Tag tone="amber">Demo mode · rule-based, not AI</Tag>}
         {mode === "skipped" && <Tag>Nothing to analyze</Tag>}
         <Tag>Extracted information only</Tag>
@@ -89,6 +108,8 @@ export function MessageAnalysisView({ analysis }) {
           </div>
         </div>
       )}
+
+      <SocialEngineeringIndicators data={analysis.social_engineering} />
     </div>
   );
 }
@@ -136,7 +157,13 @@ export default function MessageAnalysisCard({ incidentId }) {
       )}
       {state.status === "error" && (
         <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          <p className="mb-1 font-semibold">AI analysis unavailable</p>
           {state.error?.message || "The message could not be analyzed."}
+          {state.error?.details?.[0]?.failure_kind && (
+            <span className="ml-2 text-xs">
+              ({FAILURE_LABELS[state.error.details[0].failure_kind] ?? state.error.details[0].failure_kind})
+            </span>
+          )}
           {state.error?.code && <span className="ml-2 font-mono text-xs text-red-700/80">code: {state.error.code}</span>}
         </div>
       )}

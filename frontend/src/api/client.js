@@ -57,9 +57,17 @@ export const api = {
   caseSummary: (signal) => request("/api/incidents/case-summary", { signal }),
   getIncident: (id, signal) => request(`/api/incidents/${encodeURIComponent(id)}`, { signal }),
   createIncident: (payload) => request("/api/incidents", { method: "POST", body: payload }),
-  // Analyst decision: a workflow / audit record only. body = { decision: "VERIFIED"|"REJECTED", reason, analyst_name }.
+  // Analyst decision: a workflow / audit record only. body = { decision: "VERIFIED"|"REJECTED", reason, analyst_name, assessment_id? }.
   recordDecision: (id, body) =>
     request(`/api/incidents/${encodeURIComponent(id)}/decision`, { method: "POST", body }),
+  // v0.8.0: immutable assessment history. The list is summaries (v1..vN); a version returns its full evidence.
+  listAssessments: (id, signal) => request(`/api/incidents/${encodeURIComponent(id)}/assessments`, { signal }),
+  getAssessment: (id, version, signal) =>
+    request(`/api/incidents/${encodeURIComponent(id)}/assessments/${encodeURIComponent(version)}`, { signal }),
+  // v0.9.0: synthetic trusted identities (read-only) and the evidence / trust graph of one incident.
+  listIdentities: (signal) => request("/api/identities", { signal }),
+  getIdentity: (id, signal) => request(`/api/identities/${encodeURIComponent(id)}`, { signal }),
+  getTrustGraph: (id, signal) => request(`/api/incidents/${encodeURIComponent(id)}/trust-graph`, { signal }),
   analyzeMessage: (id, signal) =>
     request(`/api/incidents/${encodeURIComponent(id)}/analyze-message`, { method: "POST", signal }),
   analyzeBehaviour: (id, signal) =>
@@ -78,4 +86,17 @@ export const api = {
     }
     return request(`/api/incidents/${encodeURIComponent(id)}/analyze-risk`, { method: "POST", body, signal });
   },
+  // 0.13.0
+  getCounterfactuals: (id, signal) => request(`/api/incidents/${encodeURIComponent(id)}/counterfactuals`, { signal }),
+  getVerification: (id, signal) => request(`/api/incidents/${encodeURIComponent(id)}/verification`, { signal }),
+  // body = { action: "START"|"CONFIRM"|"FAIL", method?, reason, analyst_name }
+  recordVerification: (id, body) =>
+    request(`/api/incidents/${encodeURIComponent(id)}/verification`, { method: "POST", body }),
+  getTimeline: (id, signal) => request(`/api/incidents/${encodeURIComponent(id)}/timeline`, { signal }),
+  listScenarios: (signal) => request("/api/scenarios", { signal }),
+  loadScenario: (scenarioId) => request(`/api/scenarios/${encodeURIComponent(scenarioId)}/load`, { method: "POST" }),
+  getDashboard: (signal) => request("/api/dashboard", { signal }),
 };
+
+/** Printable report (server-rendered HTML; opens in a new tab). */
+export const reportUrl = (id) => `/api/incidents/${encodeURIComponent(id)}/report`;

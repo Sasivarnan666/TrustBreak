@@ -16,14 +16,16 @@ def append_action(
     reason: str,
     analyst_name: Optional[str],
     created_at: str,
+    assessment_id: Optional[int] = None,
 ) -> int:
     """Insert one audit row. Does NOT commit: the caller owns the transaction."""
     cursor = conn.execute(
         """
-        INSERT INTO case_actions (incident_id, previous_status, new_status, decision, reason, analyst_name, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO case_actions (incident_id, previous_status, new_status, decision, reason, analyst_name, created_at,
+                                  assessment_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (incident_id, previous_status, new_status, decision, reason, analyst_name, created_at),
+        (incident_id, previous_status, new_status, decision, reason, analyst_name, created_at, assessment_id),
     )
     return cursor.lastrowid
 
@@ -39,8 +41,12 @@ def list_actions(conn: sqlite3.Connection, incident_id: int) -> list[sqlite3.Row
     """Oldest first (insertion order)."""
     return conn.execute(
         """
-        SELECT id, previous_status, new_status, decision, reason, analyst_name, created_at
-        FROM case_actions WHERE incident_id = ? ORDER BY id ASC
+        SELECT a.id, a.previous_status, a.new_status, a.decision, a.reason, a.analyst_name, a.created_at,
+               a.assessment_id, h.version_number AS assessment_number,
+               h.risk_score AS assessment_risk_score, h.risk_level AS assessment_risk_level
+        FROM case_actions a
+        LEFT JOIN risk_assessment_history h ON h.id = a.assessment_id
+        WHERE a.incident_id = ? ORDER BY a.id ASC
         """,
         (incident_id,),
     ).fetchall()

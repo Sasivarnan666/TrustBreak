@@ -8,6 +8,8 @@ import unittest
 import zipfile
 from pathlib import Path
 
+from app import risk_repository
+
 try:
     from fastapi.testclient import TestClient
 
@@ -88,7 +90,7 @@ class PersistenceTests(PersistedRiskApiTests):
         data = res.json()["data"]
         self.assertTrue(data["persisted"])
         self.assertEqual((data["risk_level"], data["recommended_action"], data["incident_status"]), ("CRITICAL", "HOLD_PAYMENT", "hold_payment"))
-        self.assertEqual(data["assessment_version"], "0.6.0")
+        self.assertEqual(data["assessment_version"], risk_repository.ASSESSMENT_VERSION)
         self.assertTrue(data["assessed_at"].endswith("Z"))
         self.assertEqual(data["incident_id"], 1)
         self.assertEqual(self.get()["risk_assessment"], data)  # GET returns exactly what was returned
@@ -119,9 +121,9 @@ class PersistenceTests(PersistedRiskApiTests):
         again = self.get(iid)
         self.assertEqual((again["risk_assessment"]["risk_level"], again["incident_status"]), ("LOW", "proceed"))
 
-    def test_run_again_replaces_the_latest_snapshot(self):
+    def test_run_again_appends_a_new_latest_assessment_and_keeps_the_old_one(self):
         first = self.run_risk().json()["data"]
-        self.assertEqual(first["risk_score"], 85)
+        self.assertEqual(first["risk_score"], 93)
         second = self.run_risk(files={"file": ("RBI_Statement.zip", demo_zip(), "application/zip")}).json()["data"]
         self.assertEqual((second["risk_score"], second["raw_points"]), (100, 130))
         self.assertEqual(second["inputs"]["attachment"]["status"], "used")
@@ -129,12 +131,14 @@ class PersistenceTests(PersistedRiskApiTests):
         self.assertEqual(stored, second)
         self.assertGreaterEqual(stored["assessed_at"], first["assessed_at"])
         with sqlite3.connect(self.db_path) as c:
-            self.assertEqual(c.execute("SELECT COUNT(*) FROM risk_assessments").fetchone()[0], 1)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM risk_assessment_history").fetchone()[0], 2)
+        history = self.client.get("/api/incidents/1/assessments").json()["data"]
+        self.assertEqual([(h["version_number"], h["risk_score"], h["is_latest"]) for h in history], [(1, 93, False), (2, 100, True)])
 
     def test_attachment_bytes_are_never_stored(self):
         self.run_risk(files={"file": ("RBI_Statement.zip", demo_zip(), "application/zip")})
         with sqlite3.connect(self.db_path) as c:
-            for table in ("incidents", "risk_assessments"):
+            for table in ("incidents", "risk_assessment_history"):
                 for row in c.execute(f"SELECT * FROM {table}"):
                     for cell in row:
                         blob = cell if isinstance(cell, bytes) else str(cell).encode()
@@ -185,7 +189,7 @@ class ListAndSummaryTests(PersistedRiskApiTests):
         self.run_risk()
         row = self.client.get("/api/incidents").json()["data"][0]
         self.assertEqual((row["risk_level"], row["recommended_action"], row["incident_status"], row["risk_score"]),
-                         ("CRITICAL", "HOLD_PAYMENT", "hold_payment", 85))
+                         ("CRITICAL", "HOLD_PAYMENT", "hold_payment", 93))
         self.assertTrue(row["trust_break_detected"])
         self.assertTrue(row["assessed_at"])
 

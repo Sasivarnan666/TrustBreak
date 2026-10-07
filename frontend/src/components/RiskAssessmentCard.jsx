@@ -3,6 +3,7 @@ import { api } from "../api/client.js";
 import { Tag } from "./StatusBadge.jsx";
 import { Button, Card } from "./ui.jsx";
 import { formatDateTime } from "../lib/format.js";
+import { SOURCE_LABELS, SOURCE_TONE, confidenceLabel, groupSignalsByCategory } from "../lib/riskSignals.js";
 
 const SEVERITY = {
   high: { icon: "🔴", cls: "border-red-200 bg-red-50 text-red-900" },
@@ -23,7 +24,7 @@ const ACTION = {
   HOLD_PAYMENT: { icon: "🔴", cls: "border-red-300 bg-red-50", title: "HOLD PAYMENT" },
 };
 
-const SOURCE_LABELS = { message: "Message", behaviour: "Behaviour", attachment: "Attachment" };
+const INPUT_LABELS = { message: "Message", behaviour: "Behaviour", attachment: "Attachment" };
 const INPUT_STATUS = {
   used: "Used",
   not_provided: "Not provided",
@@ -40,6 +41,53 @@ function Stat({ label, children }) {
   );
 }
 
+/** One scored signal: WHAT happened, WHY it matters, WHERE the evidence came from, HOW confident it is. */
+function SignalRow({ s }) {
+  const sev = SEVERITY[s.severity] ?? SEVERITY.low;
+  const related = s.related_signal_codes ?? [];
+  const confidence = confidenceLabel(s.confidence);
+  return (
+    <li className={`rounded-md border px-3 py-2.5 text-sm ${sev.cls}`} data-testid={`signal-${s.code}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-semibold uppercase tracking-wide">
+          {sev.icon} {s.title}
+        </p>
+        <span className="flex items-center gap-1.5">
+          <Tag tone={SOURCE_TONE[s.source]}>{SOURCE_LABELS[s.source] ?? s.source}</Tag>
+          <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-semibold tabular-nums">+{s.points}</span>
+        </span>
+      </div>
+      <p className="mt-1 text-[13px] leading-relaxed">{s.message}</p>
+      {s.why && (
+        <p className="mt-1 text-[12px] leading-relaxed text-slate-700">
+          <span className="font-semibold text-slate-600">Why it matters: </span>
+          {s.why}
+        </p>
+      )}
+      {s.evidence && s.evidence !== s.message && (
+        <p className="mt-1.5 border-l-2 border-current/30 pl-2 text-[13px] italic leading-relaxed text-slate-800">
+          <span className="not-italic font-semibold text-slate-600">Evidence: </span>
+          {s.evidence}
+        </p>
+      )}
+      {s.details?.length > 0 && <p className="mt-1 font-mono text-xs text-slate-700">{s.details.join(", ")}</p>}
+      <p className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-600">
+        <span>Severity: {s.severity}</span>
+        <span>{confidence ? `Confidence: ${s.confidence}` : "Deterministic comparison"}</span>
+        {s.capped && s.base_points != null && <span>Category cap applied (+{s.base_points} before cap)</span>}
+        {related.length > 0 && (
+          <span title="Overlapping indicators describing the same evidence. They are listed, not scored again.">
+            Same evidence, counted once: {related.join(", ")}
+          </span>
+        )}
+        {(s.corroborating_sources ?? []).length > 0 && (
+          <span>Also reported by: {s.corroborating_sources.map((x) => SOURCE_LABELS[x] ?? x).join(", ")}</span>
+        )}
+      </p>
+    </li>
+  );
+}
+
 /** Pure view of one risk-correlation result (no fetching). */
 export function RiskAssessmentView({ assessment }) {
   const level = LEVEL[assessment.risk_level] ?? LEVEL.MEDIUM;
@@ -53,8 +101,9 @@ export function RiskAssessmentView({ assessment }) {
     <div>
       {assessment.assessed_at && (
         <p className="mb-3 text-xs text-slate-500" data-testid="assessed-at">
-          Assessed {formatDateTime(assessment.assessed_at)} · assessment v{assessment.assessment_version} · saved with this
-          incident
+          {assessment.version_number ? <strong className="font-semibold text-slate-700">Assessment v{assessment.version_number}</strong> : "Assessment"}{" "}
+          · assessed {formatDateTime(assessment.assessed_at)} · engine {assessment.engine_version ?? assessment.assessment_version}
+          {assessment.is_latest === false ? " · superseded by a newer assessment" : " · saved with this incident"}
         </p>
       )}
       <div className={`rounded-lg border px-4 py-3 ${level.cls}`}>
@@ -66,7 +115,7 @@ export function RiskAssessmentView({ assessment }) {
       </div>
 
       <div className="mt-4 grid divide-y divide-slate-200 rounded-lg border border-slate-200 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-        <Stat label="Risk score">
+        <Stat label="Prototype heuristic risk score">
           <span className="tabular-nums" data-testid="risk-score">
             {assessment.risk_score}
           </span>
@@ -75,8 +124,11 @@ export function RiskAssessmentView({ assessment }) {
             <div className={`h-1.5 rounded-full ${level.bar}`} style={{ width: `${pct}%` }} />
           </div>
           {assessment.raw_points > assessment.max_score && (
-            <p className="mt-1.5 text-xs font-normal text-slate-500">{assessment.raw_points} raw points, capped at {assessment.max_score}</p>
+            <p className="mt-1.5 text-xs font-normal text-slate-500">
+              {assessment.raw_points} raw points; displayed score capped at {assessment.max_score}
+            </p>
           )}
+          <p className="mt-1.5 text-xs font-normal text-slate-500">Score is not a probability of fraud.</p>
         </Stat>
         <Stat label="Risk level">
           <span data-testid="risk-level">{assessment.risk_level}</span>
@@ -86,32 +138,25 @@ export function RiskAssessmentView({ assessment }) {
         </Stat>
       </div>
 
-      <h3 className="mb-2 mt-5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Why this was flagged</h3>
+      <h3 className="mb-2 mt-5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Why this was flagged: evidence by category</h3>
       {signals.length === 0 ? (
         <p className="text-sm text-slate-600">No risk indicators were found in the evidence that was used.</p>
       ) : (
-        <ul className="space-y-2">
-          {signals.map((s) => {
-            const sev = SEVERITY[s.severity] ?? SEVERITY.low;
-            return (
-              <li key={s.code} className={`rounded-md border px-3 py-2.5 text-sm ${sev.cls}`}>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="font-semibold uppercase tracking-wide">
-                    {sev.icon} {s.title}
-                  </p>
-                  <span className="flex items-center gap-1.5">
-                    <Tag>{SOURCE_LABELS[s.source] ?? s.source}</Tag>
-                    <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-semibold tabular-nums">+{s.points}</span>
-                  </span>
-                </div>
-                <p className="mt-1 text-[13px] leading-relaxed">{s.message}</p>
-                {s.details?.length > 0 && (
-                  <p className="mt-1 font-mono text-xs text-slate-700">{s.details.join(", ")}</p>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+        <div className="space-y-4">
+          {groupSignalsByCategory(signals).map((g) => (
+            <section key={g.key} aria-label={g.label} data-testid={`category-${g.key}`}>
+              <p className="mb-1.5 flex items-center justify-between text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">
+                <span>{g.label}</span>
+                <span className="tabular-nums text-slate-500">+{g.points}</span>
+              </p>
+              <ul className="space-y-2">
+                {g.signals.map((sig) => (
+                  <SignalRow key={sig.code} s={sig} />
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
       )}
 
       <section className={`mt-5 rounded-lg border border-l-4 p-4 ${action.cls}`} aria-label="Recommended action">
@@ -129,8 +174,10 @@ export function RiskAssessmentView({ assessment }) {
       <div className="mt-4 flex flex-wrap gap-2">
         {Object.entries(inputs).map(([name, i]) => (
           <span key={name} title={i.detail}>
-            <Tag tone={i.status === "used" ? "brand" : "amber"}>
-              {SOURCE_LABELS[name] ?? name}: {INPUT_STATUS[i.status] ?? i.status}
+            <Tag tone={i.status === "used" && i.analysis_state !== "fallback" ? "brand" : "amber"}>
+              {INPUT_LABELS[name] ?? name}: {INPUT_STATUS[i.status] ?? i.status}
+              {name === "message" && i.status === "used" && i.analysis_state === "fallback" && " · fallback, not AI"}
+              {name === "message" && i.status === "used" && i.analysis_state === "ai" && " · AI-extracted"}
             </Tag>
           </span>
         ))}
@@ -144,8 +191,9 @@ export function RiskAssessmentView({ assessment }) {
       )}
 
       <p className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
-        This is a prototype risk assessment based on correlated indicators. It is not proof of fraud. Scores are heuristic
-        risk points, not probabilities; thresholds (LOW 0–19, MEDIUM 20–39, HIGH 40–69, CRITICAL 70+) are prototype values.
+        Risk assessment is deterministic prototype decision support. It is not proof of fraud and the score is not a
+        probability. Weights and thresholds (LOW 0–19, MEDIUM 20–39, HIGH 40–69, CRITICAL 70+) are uncalibrated
+        prototype values; AI may extract evidence but never scores, grades or recommends.
       </p>
     </div>
   );

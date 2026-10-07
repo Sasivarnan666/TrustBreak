@@ -129,10 +129,12 @@ class CombinedAndMissingTests(unittest.TestCase):
         self.assertTrue(r["profile_found"])
         self.assertEqual(r["anomalies"], [])
 
-    def test_frequency_is_reported_as_not_evaluated(self):
+    def test_frequency_without_baseline_is_not_enough_baseline_data(self):
+        # Changed in 0.10.0 (Baseline 2.0): a profile with no synthetic history reports NOT_ENOUGH_BASELINE_DATA
+        # (previously the generic "not_evaluated"). Still never an anomaly.
         r = run(amount=1)
         self.assertFalse(r["frequency_anomaly"])
-        self.assertEqual(r["checks"]["frequency"]["status"], "not_evaluated")
+        self.assertEqual(r["checks"]["frequency"]["status"], "NOT_ENOUGH_BASELINE_DATA")
 
 
 class DemoRegistryTests(unittest.TestCase):

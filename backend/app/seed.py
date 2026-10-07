@@ -10,6 +10,7 @@ DEMO_INCIDENT = IncidentCreate(
     sender_role="Chief Executive Officer",
     sender_known=True,
     sender_contact="+91 90000 12345",
+    sender_identity_id="CEO-001",
     channel="WhatsApp",
     amount=1_850_000,
     beneficiary_name="New Vendor X",
@@ -29,5 +30,5 @@ def seed_if_empty(conn: sqlite3.Connection) -> bool:
     """Insert the demo incident when the table is empty. Returns True if inserted."""
     if repository.count_incidents(conn) > 0:
         return False
-    repository.create_incident(conn, DEMO_INCIDENT)
+    repository.create_incident(conn, DEMO_INCIDENT, scenario_id="executive_payment_impersonation")
     return True

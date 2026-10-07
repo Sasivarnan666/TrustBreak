@@ -8,6 +8,7 @@ export const EMPTY_FORM = {
   sender_role: "",
   sender_known: false,
   sender_contact: "",
+  sender_identity_id: "",
   channel: "",
   amount: "",
   beneficiary_name: "",
@@ -24,6 +25,7 @@ export const DEMO_FORM = {
   sender_role: "Chief Executive Officer",
   sender_known: true,
   sender_contact: "+91 90000 12345",
+  sender_identity_id: "CEO-001",
   channel: "WhatsApp",
   amount: "18,50,000",
   beneficiary_name: "New Vendor X",
@@ -97,6 +99,7 @@ export function toPayload(form) {
     beneficiary_is_new: form.beneficiary_is_new,
     message: form.message.trim(),
   };
+  if (form.sender_identity_id) payload.sender_identity_id = form.sender_identity_id;
   if (form.sender_contact.trim()) payload.sender_contact = form.sender_contact.trim();
   if (form.attachment_name.trim()) {
     payload.attachment_name = form.attachment_name.trim();

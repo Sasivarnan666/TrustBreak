@@ -29,6 +29,13 @@ export function CaseTimeline({ history }) {
           <p className="mt-0.5 text-xs text-slate-500">{formatDateTime(entry.created_at)}</p>
           {entry.analyst_name && <p className="mt-1 text-sm text-slate-800">Analyst: {entry.analyst_name}</p>}
           {entry.decision !== "CASE_OPENED" && (
+            <p className="mt-1 text-xs font-medium text-slate-700" data-testid="decision-basis">
+              {entry.assessment_number
+                ? `Decision based on Assessment v${entry.assessment_number} (${entry.assessment_risk_score}/100 ${entry.assessment_risk_level})`
+                : "No assessment existed when this decision was recorded."}
+            </p>
+          )}
+          {entry.decision !== "CASE_OPENED" && (
             <p className="mt-1 whitespace-pre-wrap border-l-2 border-slate-200 pl-3 text-sm leading-relaxed text-slate-700">
               <span className="block text-xs font-medium text-slate-500">Reason</span>
               {entry.reason}
@@ -74,6 +81,7 @@ export default function CaseReviewCard({ incidentId, assessment, caseState, onCa
         decision,
         reason: reason.trim(),
         analyst_name: analystName.trim(),
+        ...(assessment?.assessment_id ? { assessment_id: assessment.assessment_id } : {}),
       });
       onCaseChange(res.data);
       setReason("");
@@ -84,7 +92,7 @@ export default function CaseReviewCard({ incidentId, assessment, caseState, onCa
       );
     } catch (err) {
       setError(err);
-      if (err?.status === 409) onReload?.(); // someone else closed it first: show the persisted state
+      if (err?.status === 409) onReload?.(); // closed elsewhere, or a newer assessment exists: re-read persisted state
       if (err?.status === 422 && err.details?.length) {
         setFieldErrors(Object.fromEntries(err.details.map((d) => [d.field, d.message])));
       }
@@ -175,6 +183,12 @@ export default function CaseReviewCard({ incidentId, assessment, caseState, onCa
               </p>
             )}
           </div>
+
+          <p className="text-xs font-medium text-slate-700" data-testid="decision-will-be-based-on">
+            {assessment?.version_number
+              ? `This decision will be recorded against Assessment v${assessment.version_number} (${assessment.risk_score}/100 ${assessment.risk_level}).`
+              : "No risk assessment exists yet; this decision will be recorded without one."}
+          </p>
 
           <div className="flex flex-wrap gap-2">
             <Button type="button" onClick={() => submit("VERIFIED")} data-testid="mark-verified">

@@ -38,6 +38,7 @@ def assess_incident_risk(
         channel=incident.channel,
         amount=incident.payment.amount,
         beneficiary=incident.payment.beneficiary_name,
+        sender_identity_id=getattr(incident.sender, "identity_id", None),
     )
 
     attachment = None

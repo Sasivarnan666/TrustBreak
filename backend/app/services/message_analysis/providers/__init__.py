@@ -3,7 +3,7 @@
 from typing import Optional
 
 from .anthropic import AnthropicProvider
-from .base import CompletionProvider, LLMProvider, MessageProvider, ProviderError, parse_model_reply
+from .base import FAILURE_KINDS, CompletionProvider, LLMProvider, MessageProvider, ProviderError, parse_model_reply
 from .gemini import GeminiProvider
 from .mock import MockProvider
 
@@ -26,6 +26,7 @@ def build_provider(name: str, api_key: Optional[str], model: str, timeout: float
 __all__ = [
     "AnthropicProvider",
     "CompletionProvider",
+    "FAILURE_KINDS",
     "GeminiProvider",
     "LLMProvider",
     "MessageProvider",

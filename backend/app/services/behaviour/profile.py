@@ -7,6 +7,9 @@ Stdlib only, so it can be tested without FastAPI.
 from dataclasses import dataclass, field
 from typing import Optional
 
+from ..identity import get_identity, resolve_by_name
+from .activity import generate_activity
+
 
 def normalize(text: Optional[str]) -> str:
     """Case-insensitive, whitespace-collapsed comparison key."""
@@ -25,6 +28,8 @@ class BehaviourProfile:
     typical_max_amount: Optional[int] = None  # defaults to max(history)
     request_frequency: Optional[str] = None  # "low" | "medium" | "high"; informational only for now
     aliases: tuple[str, ...] = field(default=())
+    activity: tuple = field(default=())  # synthetic ActivityEvent history (empty = no history available)
+    working_hours: Optional[str] = None  # the identity's stored typical_working_hours string
 
     @property
     def min_amount(self) -> Optional[int]:
@@ -49,39 +54,36 @@ class BehaviourProfile:
             "typical_max_amount": self.max_amount,
             "historical_payment_count": len(self.historical_amounts),
             "request_frequency": self.request_frequency,
+            "historical_activity_count": len(self.activity),
+            "working_hours": self.working_hours,
         }
 
 
-# --- Synthetic demo registry (matches the seeded demo incident's sender) ----- #
-_DEMO_PROFILES = (
-    BehaviourProfile(
-        employee_id="CEO-001",
-        name="Arvind Rao",
-        role="Chief Executive Officer",
-        normal_channels=("email", "erp"),
-        known_beneficiaries=("Vendor A", "Vendor B", "Vendor C"),
-        historical_amounts=(10_000, 25_000, 50_000, 75_000, 120_000, 200_000),
-        typical_max_amount=200_000,
-        request_frequency="low",
-    ),
-    BehaviourProfile(
-        employee_id="CFO-001",
-        name="Meera Iyer",
-        role="Chief Financial Officer",
-        normal_channels=("email", "erp", "phone call"),
-        known_beneficiaries=("Vendor A", "Vendor B", "Vendor D", "Vendor E"),
-        historical_amounts=(50_000, 150_000, 400_000, 750_000, 1_200_000),
-        request_frequency="medium",
-    ),
-)
+# --- Synthetic demo registry: derived from the trusted-identity registry (single source of truth) ---- #
+def profile_from_identity(identity) -> BehaviourProfile:
+    return BehaviourProfile(
+        employee_id=identity.employee_id,
+        name=identity.display_name,
+        role=identity.role,
+        normal_channels=identity.normal_channels,
+        known_beneficiaries=identity.known_beneficiaries,
+        historical_amounts=identity.historical_amounts,
+        typical_min_amount=identity.typical_amount_min,
+        typical_max_amount=identity.typical_amount_max,
+        request_frequency=identity.request_frequency,
+        aliases=identity.aliases,
+        activity=generate_activity(identity),
+        working_hours=identity.typical_working_hours,
+    )
+
+
+def get_profile_for_identity(identity_id: Optional[str]) -> Optional[BehaviourProfile]:
+    """Preferred lookup: the stable identity id."""
+    identity = get_identity(identity_id)
+    return profile_from_identity(identity) if identity else None
 
 
 def get_profile_for_sender(sender_name: Optional[str]) -> Optional[BehaviourProfile]:
-    """Look up a synthetic profile by sender name (or alias). None if unknown."""
-    key = normalize(sender_name)
-    if not key:
-        return None
-    for profile in _DEMO_PROFILES:
-        if key == normalize(profile.name) or key in {normalize(a) for a in profile.aliases}:
-            return profile
-    return None
+    """Backwards-compatible fallback: exact name/alias. None if unknown."""
+    identity = resolve_by_name(sender_name)
+    return profile_from_identity(identity) if identity else None

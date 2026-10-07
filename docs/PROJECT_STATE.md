@@ -1,6 +1,55 @@
 # Project state
 
-_Last updated: 2026-10-03 · Version 0.7.3 (0.7.0 + provider-agnostic AI adapter, Gemini primary; 0.7.3 adds automatic `backend/.env` loading) · backend: 338 tests, 338 passed, 0 skipped (fresh venv with FastAPI/httpx) · frontend: `npm run build` passed · live Gemini call NOT run (no key)_
+_Last updated: 2026-10-07 · Version 0.13.0 (counterfactuals, scenarios, verification, timeline, command center, report) · backend: 609 tests, all passing (fresh venv) · frontend: `npm run build` passed · live Gemini call NOT run (no key; free tier currently returns HTTP 429)_
+
+## Summary (authoritative; the dated sections below are history)
+
+**Current version:** 0.13.0 (single source: `backend/app/__init__.py`; `/api/health`, OpenAPI, `package.json`, README, ROADMAP, CHANGELOG and this file must agree - enforced by `tests/test_docs_sync.py`).
+
+**Completed features (implemented in code):** incident create / list / detail; **immutable assessment history** (every run appends v1, v2, ...; `engine_version`; history timeline with read-only evidence per version; a case decision stores the exact `assessment_id` / version it was based on); message extraction with Gemini, a labelled deterministic fallback and offline demo mode (states ai / fallback / mock / skipped, classified failure kinds); synthetic behavioural baseline 2.0 (deterministic synthetic history, amount ratio / percentile, new beneficiary, unusual channel, channel distribution, time, day, frequency, velocity; evidence per signal; `NOT_ENOUGH_BASELINE_DATA` when history is thin); safe static attachment analysis; deterministic Risk Correlation Engine (Risk Engine 2.0 since 0.12.0: normalized signals with provenance, deterministic consolidation, category caps, centralized prototype weights); pre-persistence consistency guard; human case workflow (OPEN / VERIFIED / REJECTED) with immutable audit rows; dashboard counts; demo scenario. **Added in 0.13.0:** counterfactual risk analysis (read-only, same engine); scenario simulator with 7 synthetic scenarios (`scenario_id`, DEMO MODE); independent verification workflow (append-only `verification_events`); forensic timeline from persisted events; command-center dashboard (`/api/dashboard`) with honest AI status; analyst incident workspace UI; printable HTML incident report (`/api/incidents/{id}/report`).
+
+**Current architecture:** `RAW INPUT -> AI or deterministic extraction -> structured signals -> behaviour + attachment analysis -> deterministic risk correlation -> explainable assessment -> human decision`. AI extracts only; the engine decides risk; a human decides the case. See [ARCHITECTURE.md](ARCHITECTURE.md).
+
+**Current limitations:** two synthetic trusted identities (linked by stable id, exact-name fallback; synthetic history is generated demo data); weights, caps and thresholds are uncalibrated prototype heuristics (score is not a probability); time / day / velocity / frequency need an explicit `received_at` (API only, no form field); attachment analysis is structural only (no hashing, contents never read); weights and thresholds are uncalibrated heuristics; no authentication; English-only rules in the fallback extractor; live Gemini never exercised; no browser-driven UI test.
+
+**Known bugs / open questions:** none open that block the demo. The attachment-overlap scoring question is resolved in 0.12.0 (`Invoice.pdf.exe` = executable 25 + one disguise 12).
+
+**Test count:** 609 backend tests (unittest; ~98% line+branch coverage of `app/` as measured at 0.7.7 with coverage.py, not a CI gate), 0 skipped when `requirements-dev.txt` is installed; frontend is verified by `npm run build` only.
+
+**Next priority:** attachment analysis 2.0; authentication; PDF generation. No git repository exists in the supplied ZIP.
+
+**Demo readiness:** the CEO scenario (Arvind Rao, WhatsApp, INR 18,50,000, new beneficiary, `RBI_Statement.zip`) reaches CRITICAL / HOLD_PAYMENT / TRUST BREAK DETECTED through the real pipeline in tests; with the zip chosen it shows 100 (130 raw points, capped), without it 93. Scores come from signals, not constants. A benign payment (Arvind Rao, Email, Vendor A, INR 1,00,000, routine wording) is 8, LOW / PROCEED. Scenario selector (`/scenarios`) and report export are available since 0.13.0; scenario results come from the engine (CEO scenario with its synthetic zip: 100 / 130 raw points CRITICAL HOLD_PAYMENT; legitimate high-value payment: 8 LOW PROCEED).
+
+**Environment requirements:** Python 3.10+ (tested 3.12), Node 18+ (tested 22), `pip install -r backend/requirements-dev.txt`, `npm install` in `frontend/`. Optional: `backend/.env` with `GEMINI_API_KEY` (loaded automatically); without a key the app runs in labelled fallback mode.
+
+**Feature status:** implemented / partial / planned / experimental / not implemented are tabulated in the [README](../README.md#feature-status).
+
+## Note 0.13.0: final-day product layer (COMPLETED)
+See CHANGELOG 0.13.0. Risk Engine, weights and thresholds unchanged. New: `services/counterfactual.py`, `scenarios.py`, `verification.py`, `timeline.py`, `dashboard.py`, `report.py`; routers `scenarios.py`, `dashboard.py`; schema `incidents.scenario_id`, table `verification_events`. Honest limits: counterfactuals work on the stored (already consolidated and capped) signals, so for a capped score (CEO demo: 130 raw points) single removals lower raw points but often not the displayed score; the combination result shows what changes the level. A scenario's synthetic zip is rebuilt in memory on load (attachment bytes are never stored). Verified: 609 backend tests pass (fresh venv), `npm run build` passes, API smoke test against a real uvicorn process (all 7 scenarios, counterfactuals, verification, timeline, report, dashboard). The React UI was NOT driven in a browser, and live Gemini was not run (deterministic fallback is the demo path).
+
+## Note 0.12.0: Risk Engine 2.0 + signal provenance (COMPLETED)
+See CHANGELOG 0.12.0. One engine, extended: `rules.py` (RISK_WEIGHTS with a rationale per weight, CONSOLIDATION_GROUPS, CATEGORY_CAPS, thresholds), `signals.py` (normalized `RiskSignal`), `adapters.py` (analyzer outputs -> signals), `engine.py` (`collect_signals` -> `consolidate` -> caps -> `correlate_signals`). Engine version `2.0.0`; older assessments keep their engine version and still render. Human decision stays separate from the engine recommendation and still links to the exact assessment. Verified: 561 backend tests pass (fresh venv), `npm run build` passes; the card was rendered server-side for a 2.0 and a pre-2.0 assessment but not driven in a browser.
+
+## Note 0.11.0: P1.5 social-engineering signals (COMPLETED)
+See CHANGELOG 0.11.0. Evidence block `social_engineering` on message analysis; AI items are grounded (quote must exist in the message) and never carry risk fields; rules run on every message. Scored since 0.12.0. (Original note: Risk Engine 2.0 had to merge `secrecy_indicator`/`secrecy_pressure`, urgency/deadline, authority claims, and the behaviour signals from 0.10.0 into category-level points.)
+
+## Note 0.10.0: P1.4 behaviour baseline 2.0 (COMPLETED)
+See CHANGELOG 0.10.0. History in `services/behaviour/activity.py` (fixed-seed, identical every run), metrics in `baseline.py`, working-hours parsing in `workhours.py`. Scoring unchanged. Design decision for the owner: time-based checks use an explicit optional `received_at`, not wall-clock `created_at`; the Phase 6 scenario simulator should set it. A velocity signal appears only when three or more incidents of one identity carry `received_at` within 10 minutes. Verified: 482 backend tests pass (fresh venv), `npm run build` passes; the UI was not driven in a browser.
+
+## Note 0.9.0: P1.2 identity + P1.3 evidence graph (COMPLETED)
+See CHANGELOG 0.9.0. Identity registry in `services/identity/`; `incidents.sender_identity_id`; `/api/identities`; `/api/incidents/{id}/trust-graph` built by the pure `services/evidence_graph.py`. Scoring unchanged.
+
+## Note 0.8.0: P1.1 assessment history (COMPLETED)
+Source of truth is `risk_assessment_history` (append-only, UPDATE blocked by trigger, unique `(incident_id, version_number)`); `latest_risk_assessments` is a view; the old `risk_assessments` table is read-only and only used to backfill v1 on upgrade. Decisions link by `case_actions.assessment_id`. See CHANGELOG 0.8.0.
+
+## Note 0.7.7: P0.4 test integrity (COMPLETED)
+Clean-venv run (400-test suite at that time, 0 skipped, no ResourceWarnings), clean `npm` build, branch-coverage audit (96% -> 98%), assertion-free-test scan. One real defect found and fixed (Anthropic timeouts were reported as `unreachable`). See CHANGELOG 0.7.7.
+
+## Note 0.7.5: P0.2 assessment correctness (COMPLETED)
+Score is backend-authoritative end to end and now guarded before persistence (`check_result_consistent`). Findings and the two deliberately deferred scoring questions are in CHANGELOG 0.7.5.
+
+## Note 0.7.4: P0.1 Gemini resilience (COMPLETED)
+Every AI failure now ends in a labelled state with a machine-readable `failure_kind`; the existing deterministic fallback is reused (no second fallback). See CHANGELOG 0.7.4. States: `ai` (validated model reply), `fallback` (AI wanted, failed; deterministic extractor ran; `failure_kind` says why), `mock` (offline/demo chosen on purpose), `skipped` (empty message). In `ai`-only mode a failure is an error ("unavailable"), never a substitute. Risk scoring is unchanged and independent of the extractor's origin; `inputs.message` discloses it.
 
 ## What was implemented
 

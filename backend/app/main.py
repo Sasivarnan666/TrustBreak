@@ -15,9 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import config, database, seed
+from . import __version__, config, database, seed
 from .errors import AppError, error_body
-from .routers import incidents
+from .routers import dashboard, identities, incidents, scenarios
 
 logger = logging.getLogger("trustbreak")
 
@@ -52,7 +52,7 @@ def _validation_details(exc: RequestValidationError) -> list[dict]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="TrustBreak API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="TrustBreak API", version=__version__, lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -86,6 +86,9 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(incidents.router)
+    app.include_router(identities.router)
+    app.include_router(scenarios.router)
+    app.include_router(dashboard.router)
 
     @app.get("/api/health", tags=["system"])
     def health():

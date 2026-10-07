@@ -1,13 +1,16 @@
 """Human case workflow (v0.7.0): transition rules and the decision use-case.
 
 Separate from the risk engine on purpose: risk level is what TrustBreak calculated; workflow status is what a
-human analyst recorded. Recording a decision never reads or writes risk assessments and never moves money.
+human analyst recorded. Recording a decision only reads the IDENTITY (id, version number) of the latest assessment,
+to link the decision to exactly what the analyst reviewed (v0.8.0). It never changes an assessment, never reads
+scoring data and never moves money.
 """
 
 import sqlite3
+from typing import Optional
 from datetime import datetime, timezone
 
-from .. import case_repository
+from .. import case_repository, risk_repository
 from ..errors import AppError, NotFoundError
 from ..schemas import CaseActionOut, CaseStateOut, CaseSummaryOut
 
@@ -48,7 +51,14 @@ def open_case(conn: sqlite3.Connection, incident_id: int, created_at: str) -> No
     )
 
 
-def record_decision(conn: sqlite3.Connection, incident_id: int, decision: str, reason: str, analyst_name: str) -> None:
+def record_decision(
+    conn: sqlite3.Connection,
+    incident_id: int,
+    decision: str,
+    reason: str,
+    analyst_name: str,
+    assessment_id: Optional[int] = None,
+) -> None:
     """Validate the transition, append the audit row and thereby update the current status, atomically."""
     if decision not in ALLOWED_DECISIONS:  # defence in depth; the request schema already restricts this
         raise AppError("invalid_decision", "Decision must be VERIFIED or REJECTED.", status_code=422)
@@ -59,9 +69,24 @@ def record_decision(conn: sqlite3.Connection, incident_id: int, decision: str, r
         current = case_repository.current_status(conn, incident_id)
         if not can_transition(current, decision):
             raise _closed(current)
+        latest = risk_repository.latest_assessment_ref(conn, incident_id)
+        if assessment_id is not None:
+            if not risk_repository.assessment_belongs_to(conn, incident_id, assessment_id):
+                raise AppError(
+                    "assessment_not_found", "That assessment does not belong to this incident.", status_code=422,
+                    details=[{"field": "assessment_id", "message": "Unknown assessment for this incident."}],
+                )
+            if latest is None or latest[0] != assessment_id:
+                raise AppError(
+                    "assessment_superseded",
+                    f"A newer assessment (v{latest[1]}) exists. Review it before recording a decision.",
+                    status_code=409,
+                    details=[{"field": "assessment_id", "message": f"Latest assessment is v{latest[1]}."}],
+                )
+        linked = latest[0] if latest else None  # explicit id was verified above to equal the latest
         case_repository.append_action(
             conn, incident_id=incident_id, previous_status=current, new_status=decision, decision=decision,
-            reason=reason, analyst_name=analyst_name, created_at=_now(),
+            reason=reason, analyst_name=analyst_name, created_at=_now(), assessment_id=linked,
         )
         conn.commit()
     except sqlite3.IntegrityError:  # unique one-decision index: a concurrent request closed the case first
@@ -93,6 +118,10 @@ def case_history(conn: sqlite3.Connection, incident_id: int) -> list[CaseActionO
             reason=row["reason"],
             analyst_name=row["analyst_name"],
             created_at=row["created_at"],
+            assessment_id=row["assessment_id"],
+            assessment_number=row["assessment_number"],
+            assessment_risk_score=row["assessment_risk_score"],
+            assessment_risk_level=row["assessment_risk_level"],
         )
         for row in case_repository.list_actions(conn, incident_id)
     ]

@@ -88,6 +88,22 @@ class MessageAnalysis:
     provider: Optional[str] = None  # provider that produced `extraction`: gemini | anthropic | mock | None
     requested_provider: Optional[str] = None  # provider the configuration asked for
     is_fallback: bool = False  # True when an AI provider was wanted but the demo extractor was used
+    # Four user-visible states (additive): ai | fallback | mock | skipped. ("unavailable" is an
+    # error response in `ai` mode or a risk-input status, never a successful extraction.)
+    analysis_state: Optional[str] = None  # derived from mode/is_fallback when not given
+    failure_kind: Optional[str] = None  # why the AI path failed (FAILURE_KINDS); None when it did not
+    # 0.11.0: structured social-engineering evidence (see social_engineering.py); None when nothing was analyzed.
+    social_engineering: Optional[dict] = None
+
+    def __post_init__(self) -> None:
+        if self.analysis_state is None:  # frozen dataclass: derive once via object.__setattr__
+            if self.mode == "ai":
+                state = "ai"
+            elif self.mode == "skipped":
+                state = "skipped"
+            else:
+                state = "fallback" if self.is_fallback else "mock"
+            object.__setattr__(self, "analysis_state", state)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -218,6 +234,35 @@ def validate_extraction(raw: Any) -> MessageExtraction:
 # JSON Schema for provider-side structured output (derived from the constants
 # above so it cannot drift from `validate_extraction`, which stays authoritative)
 # --------------------------------------------------------------------------- #
+SOCIAL_SIGNALS_KEY = "social_engineering_signals"  # optional model-reply key, validated separately (see social_engineering.py)
+
+
+def response_json_schema() -> dict:
+    """Provider-side schema = the 12-field extraction schema plus the OPTIONAL social-engineering indicator list.
+
+    `extraction_json_schema()` is unchanged and `validate_extraction` still rejects unknown keys; the optional key is
+    removed from the reply before extraction validation and validated on its own.
+    """
+    from .social_engineering import CONFIDENCE_LEVELS, MAX_AI_SIGNALS, SIGNALS
+
+    schema = extraction_json_schema()
+    schema["properties"][SOCIAL_SIGNALS_KEY] = {
+        "type": "array",
+        "maxItems": MAX_AI_SIGNALS,
+        "items": {
+            "type": "object",
+            "properties": {
+                "signal": {"type": "string", "enum": list(SIGNALS)},
+                "evidence": {"type": "string", "maxLength": MAX_TEXT_LEN},
+                "confidence": {"type": "string", "enum": list(CONFIDENCE_LEVELS)},
+            },
+            "required": ["signal", "evidence", "confidence"],
+            "additionalProperties": False,
+        },
+    }
+    return schema
+
+
 def extraction_json_schema() -> dict:
     nullable_text = {"type": ["string", "null"], "maxLength": MAX_TEXT_LEN}
     return {

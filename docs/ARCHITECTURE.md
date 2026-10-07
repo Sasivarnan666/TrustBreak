@@ -59,7 +59,7 @@ Structured MessageExtraction  (12 fixed fields, unchanged)
 Behaviour analysis  +  Attachment analysis  ->  deterministic Risk Correlation  ->  Risk assessment
 ```
 
-`analyze_message()` returns `MessageAnalysis { mode, model, extraction, notes, fallback_reason, provider, requested_provider, is_fallback, is_final_decision=false }`. `mode` is `ai` / `mock` / `skipped`; `provider` is who produced the extraction; `is_fallback` is true only when an AI provider was wanted but the demo extractor ran.
+`analyze_message()` returns `MessageAnalysis { mode, model, extraction, notes, fallback_reason, provider, requested_provider, is_fallback, is_final_decision=false }`. `mode` is `ai` / `mock` / `skipped`; `provider` is who produced the extraction; `is_fallback` is true only when an AI provider was wanted but the deterministic extractor ran. Since 0.7.4 the result also has `analysis_state` (`ai` / `fallback` / `mock` / `skipped`) and `failure_kind` (why the AI path failed: quota 429, auth, model, timeout, 5xx, network, empty, invalid, no key, SDK missing, unexpected). A provider failure is a `ProviderError` with a `kind`; any other provider exception also degrades to a labelled fallback in `auto`. In `ai` mode `ExtractionError` carries the kind into the error envelope `details`.
 
 | Module | Responsibility |
 |---|---|
@@ -113,27 +113,32 @@ Uploaded file (multipart, in memory)
 
 Rules: no execution, extraction, file writes, shell calls or network access (enforced by tests); independent of message/behaviour analysis and of any score. Because the incident stores attachment metadata only, `POST /api/incidents/{id}/analyze-attachment` takes the file as multipart field `file`, analyzes it during the request and discards it. Its output is consumed by the risk correlation engine (below).
 
-### Risk correlation engine (`services/risk_correlation/`)
+### Risk correlation engine - Risk Engine 2.0 (`services/risk_correlation/`)
 
 ```
-Message Analysis ─────┐
-Behaviour Analysis ───┼──>  Risk Correlation Engine  ──>  Explainable Risk Assessment
-Attachment Analysis ──┘     (deterministic rules)          score · level · action · signals[]
-```
-
-```
-Incident ──┬─ analyze_message()           ─┐
-           ├─ analyze_incident_behaviour() ─┼─> correlate_risk(message, behaviour, attachment, incident)
-           └─ analyze_attachment(file)?   ─┘        -> RiskCorrelationResult
+Message Analysis (extraction + 11 social-engineering indicators) ─┐
+Behaviour Analysis (synthetic baseline anomalies) ────────────────┼─ adapters ─> normalized RiskSignal list
+Attachment Analysis (static findings) ────────────────────────────┘                    │
+                                                                      consolidate (one contribution per group)
+                                                                                       │
+                                                                      category caps -> sum, cap at 100 -> level -> action
+                                                                                       ▼
+                                                                         Explainable assessment (deterministic)
 ```
 
 | Module | Responsibility |
 |---|---|
-| `rules.py` | The scoring table in one place: categories, prototype point weights, level thresholds, action mapping, finding-type and intent mappings, wording. Stdlib only. |
-| `engine.py` | `correlate_risk(...)`: pure and stdlib-only, no I/O, never raises on missing or odd input, imports none of the analyzers. At most one signal per category; adds points; caps the displayed score at 100; maps score -> level -> action; sets `trust_break_detected`. |
+| `rules.py` | The scoring table in one place: `RISK_WEIGHTS` (a documented rationale per weight), `CONSOLIDATION_GROUPS`, `CATEGORY_CAPS`, confidence factors, thresholds, action mapping, source and category vocabularies, `ENGINE_VERSION`. Prototype heuristic values, not calibrated. Stdlib only. |
+| `signals.py` | The normalized `RiskSignal`: code, category, source, title, message, why, evidence, confidence, points, severity, group, analyzer, base_points, capped, related_signal_codes, corroborating_sources. |
+| `adapters.py` | Analyzer output -> signals. Decides what evidence exists and where it came from (`rule`, `synthetic_baseline`, `AI`, `fallback`, `attachment_static`, `system`). No scoring numbers. |
+| `engine.py` | `collect_signals` (adapters), `consolidate` (deterministic deduplication), category caps, `correlate_signals(signals, inputs)` (the single scoring path) and `correlate_risk(...)` (= collect + correlate). Pure, no I/O. Never raises on missing input. Does not import the analyzers. |
 | `service.py` | `assess_incident_risk(incident, attachment_file=None)`: the **only** module that imports the analyzers. A message-analysis failure becomes "unavailable" evidence, not a failed request. |
 
-Rules: the correlation layer sits **above** the analyzers. They stay independently usable and import nothing from each other or from this package (enforced by an AST test); no LLM is consulted for the score; the engine only recommends and never blocks or executes a payment. Scores are heuristic risk points, not probabilities. `POST /api/incidents/{id}/analyze-risk` takes an optional multipart `file` (attachment evidence needs the bytes, which are not stored), is computed on demand and not stored. See PROJECT_STATE for the weight table, thresholds and limitations.
+Categories: IDENTITY, COMMUNICATION, FINANCIAL, BENEFICIARY, BEHAVIOUR, SOCIAL_ENGINEERING, ATTACHMENT; none is required, and missing evidence is never suspicious by itself.
+
+Deduplication rules (visible in `rules.CONSOLIDATION_GROUPS`, tested): a code counts once; signals in the same group describe the same evidence, so only the strongest is scored and the others are kept as `related_signal_codes`. Groups: time pressure (urgency / high urgency / deadline), concealment (secrecy / isolation), payment request (transfer intent / payment pressure), authority (claim / mismatch), channel (unusual / rare), attachment executable (executable / risky extension), attachment disguise (document-looking / double extension), attachment structure. Category caps then bound BEHAVIOUR (20), SOCIAL_ENGINEERING (30) and ATTACHMENT (40). Social-engineering weights scale with the indicator's confidence.
+
+Rules: the correlation layer sits **above** the analyzers, which stay independently usable (AST-tested); no LLM is consulted for any point, level or action (an AI indicator is only evidence, labelled `AI`, and its quote must exist in the message); the engine only recommends and never blocks or executes a payment. Because `correlate_signals` takes normalized signals, a future "same incident with signal X removed" run needs no new scoring code. Scores are heuristic risk points, not probabilities. `POST /api/incidents/{id}/analyze-risk` takes an optional multipart `file`, is computed on demand and its result is persisted as a new immutable assessment (below).
 
 ### Persisted risk assessment (v0.6.0)
 
@@ -143,7 +148,9 @@ behaviour        ├─> risk_correlation (pure) ─> risk_repository (SQL) ─>
 attachment (mem) ┘                                  risk_assessments table
 ```
 
-`POST /analyze-risk` runs `assess_incident_risk`, turns the result into a dict and calls `risk_repository.save_risk_assessment`. The engine has no SQL, HTTP, filesystem, LLM or payment code (AST-tested). Table `risk_assessments` holds the latest snapshot per incident (`incident_id UNIQUE`, upsert), with scalar columns for the headline numbers and JSON text for signals, inputs, thresholds and notes, plus `assessment_version` and `assessed_at`. Uploaded bytes are analyzed in memory and never stored. An incomplete result (message analysis unavailable) is returned with `persisted: false` and not saved. `services/risk_correlation/incident_status.py` maps level to incident status: LOW -> `proceed`, MEDIUM/HIGH -> `verify`, CRITICAL -> `hold_payment`, none -> `not_assessed` (a recommendation to a human; nothing is blocked). The list endpoint LEFT JOINs the latest assessment (no N+1) and `GET /api/incidents/risk-summary` counts levels in SQL.
+`POST /analyze-risk` runs `assess_incident_risk`, turns the result into a dict and calls `risk_repository.save_risk_assessment`. The engine has no SQL, HTTP, filesystem, LLM or payment code (AST-tested). Table `risk_assessments` holds the latest snapshot per incident (`incident_id UNIQUE`, upsert), with scalar columns for the headline numbers and JSON text for signals, inputs, thresholds and notes, plus `assessment_version` and `assessed_at`. **Assessment history (0.8.0).** Every run appends one row to `risk_assessment_history` (version 1, 2, 3 per incident, computed inside the INSERT so concurrent runs cannot collide; `UNIQUE (incident_id, version_number)`); rows are never updated (trigger). The latest is the highest version (view `latest_risk_assessments`, used by the list, dashboard counts and incident status). `risk_assessments` is the pre-0.8.0 snapshot table, now read-only, used once to backfill v1 when an older database is opened. A case decision reads only the *identity* of the latest assessment and stores it in `case_actions.assessment_id`; it never changes an assessment. The API field `assessment_version` is the legacy name of `engine_version`; the sequence number is `version_number`.
+
+Before saving, the router calls `risk_repository.check_result_consistent` (score = min(cap, sum of signal points), category points match the signals, level matches the thresholds, action matches the level, no duplicate category); a self-contradicting result is refused and nothing is written (0.7.5). Since 0.7.4 `inputs.message` also records `analysis_state`, `provider` and `failure_kind` (provenance only; no scoring path reads them). Uploaded bytes are analyzed in memory and never stored. An incomplete result (message analysis unavailable) is returned with `persisted: false` and not saved. `services/risk_correlation/incident_status.py` maps level to incident status: LOW -> `proceed`, MEDIUM/HIGH -> `verify`, CRITICAL -> `hold_payment`, none -> `not_assessed` (a recommendation to a human; nothing is blocked). The list endpoint LEFT JOINs the latest assessment (no N+1) and `GET /api/incidents/risk-summary` counts levels in SQL.
 
 ### Case workflow (v0.7.0)
 
@@ -160,6 +167,9 @@ Two separate concerns: **risk level** is what TrustBreak calculated; **workflow 
 ### The analysis seam
 
 `analyze_incident` is the single place future detection plugs in. Today it is still a placeholder (the risk correlation engine runs on demand beside it; since 0.6.0 its result is persisted and is the incident's real status, while this placeholder is kept only as an intake note): it returns `risk_status = "needs_review"`, a fixed recommended action, and evidence items that are the submitted facts (`source = "submitted"`). The result is computed once at creation and stored with the incident. Replacing it with real analysis should not change the router, the schemas' envelope, or the frontend's data flow.
+
+## Trusted identity and evidence graph (0.9.0)
+`services/identity/` holds the synthetic `TrustedIdentity` registry (stdlib only). Incidents link to an identity through `incidents.sender_identity_id` (source `explicit`, `name_match` or `none`); `behaviour` derives its profiles from the registry and prefers the id. `services/evidence_graph.py` is a pure builder: identity baseline + behaviour checks + the latest stored assessment's signals -> nodes, edges and EXPECTED-vs-OBSERVED rows, served read-only by `GET /api/incidents/{id}/trust-graph`. It never scores, never calls an AI and the verdict node only repeats the stored assessment.
 
 ## Data model
 
@@ -190,6 +200,19 @@ failure: { "success": false, "error": { "code", "message", "details": [{ "field"
 
 Incident detail (`GET /api/incidents/{id}`) returns nested `sender`, `payment`, `attachment` (nullable), `analysis { mode, risk_status, summary, recommended_action, evidence[] }` (the stored intake placeholder), and since 0.6.0 `risk_assessment` (nullable), `incident_status` and `incident_status_label`. List rows are flat summaries that also carry the latest risk level / action / status (or `not_assessed`). Since 0.7.0 detail also returns `workflow_status`, `workflow_status_label` and `case_history[]`, list rows carry `workflow_status(_label)`, `POST /api/incidents/{id}/decision` records an analyst decision (`409 case_already_closed` when closed) and `GET /api/incidents/case-summary` returns open / verified / rejected counts.
 
+## Product layer (0.13.0)
+
+All additions extend the existing flow; nothing replaces the Risk Engine.
+
+| Module | Role |
+|---|---|
+| `services/counterfactual.py` | Rebuilds `RiskSignal`s from the latest stored assessment, removes one evidence group (or a combination) and calls `correlate_signals` again. Read-only; no persistence |
+| `services/scenarios.py` + `routers/scenarios.py` | 7 synthetic input definitions; loading creates a normal incident (`scenario_id`) and runs `assess_incident_risk` + `save_risk_assessment` |
+| `services/verification.py` + `verification_repository.py` | Append-only verification audit (`verification_events`); state derived from the last row; independent of assessments and case decisions |
+| `services/timeline.py` | Deterministic merge of incident, assessment history, verification and case audit rows; timestamps are never invented |
+| `services/dashboard.py` + `routers/dashboard.py` | Read-only aggregates and honest AI status (configuration + last persisted extraction state) |
+| `services/report.py` | Escaped, self-contained printable HTML report served by `GET /api/incidents/{id}/report` |
+
 ## Frontend (`frontend/src/`)
 
 | Path | Role |
@@ -198,7 +221,8 @@ Incident detail (`GET /api/incidents/{id}`) returns nested `sender`, `payment`, 
 | `hooks/useAsync.js` | Load/error/reload with abort on unmount |
 | `lib/` | `format.js` (₹ en-IN, dates, bytes), `risk.js` (status display), `caseWorkflow.js` (case status/event labels, decision validation), `validation.js` (form rules mirroring the backend) |
 | `components/` | `Layout`, `ui` (Card, Button, PageHeader…), `StatusBadge` (Risk + Case badges), `CaseReviewCard` (decision form + history timeline), `States` (loading/error/empty) |
-| `pages/` | `Dashboard`, `IncidentList`, `IncidentDetail`, `CreateIncident` |
+| `pages/` | `Dashboard` (command center), `IncidentList`, `IncidentDetail` (analyst workspace), `CreateIncident`, `Scenarios`, `Identities` |
+| 0.13.0 components | `CounterfactualCard`, `VerificationCard`, `TimelineCard`, `EvidenceChainCard` (wraps the existing evidence graph data), `MessageIntelligenceCard`, `AttachmentIntelligenceCard` |
 
 Pages that display data are split into a fetching component and a pure `*View` component, so rendering can be tested without a server.
 

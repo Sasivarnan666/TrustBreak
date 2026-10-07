@@ -19,8 +19,8 @@ Security shape of the request: ONE text-only `generate_content` call.
 
 from typing import Any, Optional
 
-from ..schema import extraction_json_schema
-from .base import LLMProvider, ProviderError
+from ..schema import response_json_schema
+from .base import LLMProvider, ProviderError, kind_for_status
 
 MAX_OUTPUT_TOKENS = 4096  # headroom for models that spend part of the budget on thinking
 
@@ -35,7 +35,7 @@ def _load_sdk():
         from google import genai
         from google.genai import types
     except ImportError:
-        raise ProviderError("The google-genai package is not installed") from None
+        raise ProviderError("The google-genai package is not installed", "sdk_missing") from None
     return genai, types
 
 
@@ -77,7 +77,7 @@ class GeminiProvider(LLMProvider):
             temperature=0,
             max_output_tokens=MAX_OUTPUT_TOKENS,
             response_mime_type="application/json",
-            response_json_schema=extraction_json_schema(),
+            response_json_schema=response_json_schema(),
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
         try:
@@ -87,16 +87,16 @@ class GeminiProvider(LLMProvider):
             raise
         except Exception as exc:  # noqa: BLE001 - SDK raises many types; never echo their text
             if _is_timeout(exc):
-                raise ProviderError("Gemini request timed out") from None
+                raise ProviderError("Gemini request timed out", "timeout") from None
             code = getattr(exc, "code", None)
             if isinstance(code, int):
-                raise ProviderError(f"Gemini returned HTTP {code}") from None
-            raise ProviderError("Gemini could not be reached") from None
+                raise ProviderError(f"Gemini returned HTTP {code}", kind_for_status(code)) from None
+            raise ProviderError("Gemini could not be reached", "unreachable") from None
 
         try:
             text: Optional[str] = response.text
         except Exception:  # noqa: BLE001
             text = None
         if not isinstance(text, str) or not text.strip():
-            raise ProviderError("Gemini returned an empty or blocked response")
+            raise ProviderError("Gemini returned an empty or blocked response", "empty_response")
         return text

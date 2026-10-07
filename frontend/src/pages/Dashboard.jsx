@@ -6,157 +6,191 @@ import { ButtonLink, Card, PageHeader } from "../components/ui.jsx";
 import { useAsync } from "../hooks/useAsync.js";
 import { formatDateTime, formatINR } from "../lib/format.js";
 
-function Kpi({ label, value, hint }) {
+const ACTION_TEXT = { PROCEED: "Proceed", VERIFY: "Verify", HOLD_PAYMENT: "Hold payment" };
+const VERIFY_TEXT = { NOT_STARTED: "Not started", IN_PROGRESS: "In progress", CONFIRMED: "Confirmed", FAILED: "Failed" };
+
+function Kpi({ label, value, hint, accent }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-5">
+    <div className={`rounded-lg border bg-white p-4 ${accent ?? "border-slate-200"}`}>
       <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</p>
-      <p className="mt-2 text-3xl font-semibold tabular-nums tracking-tight text-slate-900">{value}</p>
-      <p className="mt-1 text-xs text-slate-500">{hint}</p>
+      <p className="mt-1.5 text-3xl font-semibold tabular-nums tracking-tight text-slate-900">{value}</p>
+      <p className="mt-0.5 text-xs text-slate-500">{hint}</p>
     </div>
   );
 }
 
-function channelCounts(incidents) {
-  const counts = new Map();
-  for (const incident of incidents) counts.set(incident.channel, (counts.get(incident.channel) ?? 0) + 1);
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+function Bars({ items, color = "bg-slate-600", empty }) {
+  const max = Math.max(1, ...items.map((i) => i.value));
+  const none = items.every((i) => i.value === 0);
+  return (
+    <ul className="space-y-2.5">
+      {items.map((i) => (
+        <li key={i.label} className="grid grid-cols-[8.5rem_1fr_2rem] items-center gap-3 text-sm">
+          <span className="text-slate-700">{i.label}</span>
+          <span className="h-2 rounded-full bg-slate-100" aria-hidden="true">
+            <span className={`block h-2 rounded-full ${i.color ?? color}`} style={{ width: `${(i.value / max) * 100}%` }} />
+          </span>
+          <span className="text-right font-semibold tabular-nums text-slate-900">{i.value}</span>
+        </li>
+      ))}
+      {none && empty && <li className="pt-1 text-xs text-slate-500">{empty}</li>}
+    </ul>
+  );
 }
 
-/** Pure view: everything it needs arrives as props. `summary` holds counts of PERSISTED risk assessments;
- *  `caseSummary` holds counts of PERSISTED analyst workflow status (omitted -> the case row is not shown, never faked). */
-export function DashboardView({ incidents, total, summary, caseSummary }) {
-  const counts = summary ?? { total, critical: 0, high: 0, medium: 0, low: 0, assessed: 0, not_assessed: total };
-  const channels = channelCounts(incidents);
-  const maxChannel = Math.max(...channels.map(([, n]) => n), 1);
+const STATUS_DOT = { ok: "bg-emerald-500", fallback: "bg-amber-500", ai: "bg-emerald-500", configured: "bg-slate-400" };
 
+function StatusRow({ name, state, detail }) {
+  return (
+    <li className="flex items-start gap-3 py-2.5 text-sm">
+      <span className={`mt-1.5 size-2 shrink-0 rounded-full ${STATUS_DOT[state] ?? "bg-slate-400"}`} aria-hidden="true" />
+      <div className="min-w-0">
+        <p className="font-semibold text-slate-900">{name}</p>
+        <p className="text-xs leading-relaxed text-slate-600">{detail}</p>
+      </div>
+    </li>
+  );
+}
+
+/** Pure view of the /api/dashboard aggregate. */
+export function DashboardView({ data }) {
+  const { kpis, risk_distribution: dist, trust_break_categories: cats, active_high_risk: active, recent_critical: recent, system_status: sys } = data;
+  if (kpis.total_incidents === 0) {
+    return (
+      <EmptyState
+        title="No incidents yet"
+        description="Load a synthetic scenario to see TrustBreak correlate identity, channel, behaviour, beneficiary, social-engineering and attachment evidence."
+        action={<ButtonLink to="/scenarios">Open scenarios</ButtonLink>}
+      />
+    );
+  }
+  const ai = sys.ai_extraction;
   return (
     <>
-      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-        Risk · TrustBreak assessment
-      </h2>
-      <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
-        <Kpi label="Total incidents" value={counts.total} hint="All recorded requests" />
-        <Kpi label="Critical" value={counts.critical} hint="Hold payment recommended" />
-        <Kpi label="High" value={counts.high} hint="Verify before paying" />
-        <Kpi label="Medium" value={counts.medium} hint="Verify before paying" />
-        <Kpi label="Low" value={counts.low} hint="Proceed" />
-        <Kpi label="Not assessed" value={counts.not_assessed} hint="No risk assessment run yet" />
-      </div>
-
-      {caseSummary && (
-        <section aria-label="Case workflow" className="mt-6" data-testid="case-kpis">
-          <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-            Case workflow · analyst review
-          </h2>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Kpi label="Open cases" value={caseSummary.open} hint="Awaiting analyst review" />
-            <Kpi label="Verified cases" value={caseSummary.verified} hint="Analyst verified the request" />
-            <Kpi label="Rejected cases" value={caseSummary.rejected} hint="Analyst rejected the case" />
-          </div>
-        </section>
-      )}
+      <section aria-label="Key figures" className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5" data-testid="kpis">
+        <Kpi label="Critical" value={kpis.critical} hint="Hold payment recommended" accent={kpis.critical ? "border-red-300" : undefined} />
+        <Kpi label="High" value={kpis.high} hint="Verify before paying" accent={kpis.high ? "border-orange-300" : undefined} />
+        <Kpi label="Open cases" value={kpis.open_cases} hint="Awaiting analyst decision" />
+        <Kpi label="Verified" value={kpis.verified} hint="Analyst verified the request" />
+        <Kpi label="Rejected" value={kpis.rejected} hint="Analyst rejected the case" />
+      </section>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        <Card
-          title="Recent incidents"
-          padded={false}
-          className="lg:col-span-2"
-          aside={
-            <Link to="/incidents" className="text-xs font-semibold text-brand-700 hover:underline">
-              View all
-            </Link>
-          }
-        >
-          <ul className="divide-y divide-slate-100">
-            {incidents.slice(0, 5).map((incident) => (
-              <li key={incident.id}>
-                <Link to={`/incidents/${incident.id}`} className="flex items-center gap-4 px-5 py-3.5 hover:bg-slate-50">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-slate-900">{incident.title}</p>
-                    <p className="mt-0.5 truncate text-xs text-slate-500">
-                      <span className="font-mono">{incident.reference}</span> · {incident.channel} →{" "}
-                      {incident.beneficiary_name} · {formatDateTime(incident.created_at)}
-                    </p>
-                  </div>
-                  <div className="hidden text-right sm:block">
-                    <p className="text-sm font-semibold tabular-nums text-slate-900">{formatINR(incident.amount)}</p>
-                    {incident.beneficiary_is_new && <Tag tone="amber">New beneficiary</Tag>}
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <RiskBadge level={incident.risk_level} />
-                    <CaseBadge status={incident.workflow_status} />
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </Card>
+        <div className="lg:col-span-2">
+          <Card title="Active high-risk incidents" padded={false} aside={<span className="text-xs text-slate-500">{active.length} open</span>}>
+            {active.length === 0 ? (
+              <p className="px-5 py-8 text-center text-sm text-slate-600">No open high-risk incidents. Closed cases and lower-risk requests are listed under Incidents.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[40rem] text-left text-sm">
+                  <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+                    <tr>
+                      <th className="px-4 py-2.5">Incident</th>
+                      <th className="px-3 py-2.5">Identity</th>
+                      <th className="px-3 py-2.5 text-right">Amount</th>
+                      <th className="px-3 py-2.5">Risk</th>
+                      <th className="px-3 py-2.5 text-center">Trust breaks</th>
+                      <th className="px-3 py-2.5">Action</th>
+                      <th className="px-4 py-2.5">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {active.map((i) => (
+                      <tr key={i.incident_id} className="hover:bg-slate-50">
+                        <td className="whitespace-nowrap px-4 py-3">
+                          <Link to={`/incidents/${i.incident_id}`} className="font-mono text-[13px] font-semibold text-brand-700 hover:underline">{i.reference}</Link>
+                          {i.is_synthetic && <span className="ml-2"><Tag tone="amber">Demo</Tag></span>}
+                        </td>
+                        <td className="px-3 py-3">{i.identity_name}{i.identity_id && <span className="block font-mono text-[11px] text-slate-500">{i.identity_id}</span>}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums">{formatINR(i.amount)}</td>
+                        <td className="whitespace-nowrap px-3 py-3"><RiskBadge level={i.risk_level} /> <span className="ml-1 font-semibold tabular-nums">{i.risk_score}</span></td>
+                        <td className="px-3 py-3 text-center tabular-nums">{i.trust_dimensions}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-xs font-medium text-slate-700">{ACTION_TEXT[i.recommended_action]}</td>
+                        <td className="whitespace-nowrap px-4 py-3">
+                          <CaseBadge status={i.workflow_status} />
+                          <span className="mt-1 block text-[11px] text-slate-500">Verification: {VERIFY_TEXT[i.verification_state]}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        </div>
 
         <div className="space-y-6">
-          <Card title="By channel">
-            <ul className="space-y-3">
-              {channels.map(([channel, count]) => (
-                <li key={channel}>
-                  <div className="flex items-baseline justify-between text-sm">
-                    <span className="font-medium text-slate-800">{channel}</span>
-                    <span className="tabular-nums text-slate-500">{count}</span>
-                  </div>
-                  <div className="mt-1.5 h-1.5 rounded-full bg-slate-100">
-                    <div className="h-1.5 rounded-full bg-brand-600" style={{ width: `${(count / maxChannel) * 100}%` }} />
-                  </div>
-                </li>
-              ))}
-            </ul>
+          <Card title="Risk distribution">
+            <Bars
+              items={[
+                { label: "Critical", value: dist.critical, color: "bg-red-600" },
+                { label: "High", value: dist.high, color: "bg-orange-500" },
+                { label: "Medium", value: dist.medium, color: "bg-amber-400" },
+                { label: "Low", value: dist.low, color: "bg-emerald-500" },
+              ]}
+            />
+            <p className="mt-3 text-xs text-slate-500">{dist.assessed} assessed · {kpis.not_assessed} not assessed</p>
           </Card>
-
-          <Card title="Risk engine">
-            <div className="flex items-center gap-2">
-              <Tag tone="brand">Deterministic</Tag>
-              <span className="text-sm font-medium text-slate-800">Heuristic risk points</span>
-            </div>
-            <p className="mt-2 text-sm leading-relaxed text-slate-600">
-              Counts above come from stored TrustBreak risk assessments only. Incidents without one are “Not assessed”.
-              Assessments are decision support, not proof of fraud, and no payment is blocked. Case counts are analyst
-              review records only; they never change a risk assessment.
-            </p>
+          <Card title="Trust break categories">
+            <Bars items={cats.map((c) => ({ label: c.label, value: c.incidents }))} empty="No broken-trust findings yet." />
+            <p className="mt-3 text-xs text-slate-500">Incidents (medium risk or above) with scored evidence in each category.</p>
           </Card>
         </div>
       </div>
+
+      <div className="mt-6 grid gap-6 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <Card title="Recent critical incidents" padded={false}>
+            {recent.length === 0 ? (
+              <p className="px-5 py-6 text-sm text-slate-600">No critical incidents.</p>
+            ) : (
+              <ul className="divide-y divide-slate-100">
+                {recent.map((i) => (
+                  <li key={i.incident_id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-sm">
+                    <div className="min-w-0">
+                      <Link to={`/incidents/${i.incident_id}`} className="font-mono text-[13px] font-semibold text-brand-700 hover:underline">{i.reference}</Link>
+                      <span className="ml-2 text-slate-700">{i.title}</span>
+                      <p className="text-xs text-slate-500">Assessed {formatDateTime(i.assessed_at)} · {formatINR(i.amount)}</p>
+                    </div>
+                    <RiskBadge level={i.risk_level} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+        <Card title="System status">
+          <ul className="divide-y divide-slate-100" data-testid="system-status">
+            <StatusRow name="Backend" state="ok" detail={`Online · v${sys.backend.version}`} />
+            <StatusRow name="Risk Engine" state="ok" detail={`${sys.risk_engine.engine_version} · ${sys.risk_engine.mode}`} />
+            <StatusRow name="AI extraction" state={ai.state} detail={ai.label} />
+            <StatusRow name="Attachment analyzer" state="ok" detail={sys.attachment_analyzer.mode} />
+          </ul>
+        </Card>
+      </div>
+      <p className="mt-6 text-xs text-slate-500">{data.note}</p>
     </>
   );
 }
 
 export default function Dashboard() {
-  const { data, error, loading, reload } = useAsync(
-    async (signal) => {
-      const [list, summary, cases] = await Promise.all([
-        api.listIncidents({ limit: 500 }, signal),
-        api.riskSummary(signal),
-        api.caseSummary(signal),
-      ]);
-      return { ...list, summary: summary.data, caseSummary: cases.data };
-    },
-    [],
-  );
-
+  const { data, error, loading, reload } = useAsync((signal) => api.getDashboard(signal), []);
   return (
     <>
       <PageHeader
-        eyebrow="Overview"
-        title="Dashboard"
-        subtitle="Payment requests checked against sender, channel, payee and attachment."
-        actions={<ButtonLink to="/incidents/new">New incident</ButtonLink>}
+        eyebrow="Analyst command center"
+        title="Detect the Trust Break — before the payment."
+        subtitle="Trust & Transaction Risk Intelligence: correlate identity, channel, financial behaviour, beneficiary, social engineering and attachment evidence, then verify independently before money moves."
+        actions={
+          <>
+            <ButtonLink to="/scenarios" variant="secondary">Load a scenario</ButtonLink>
+            <ButtonLink to="/incidents/new">New incident</ButtonLink>
+          </>
+        }
       />
-      {loading && <LoadingState label="Loading dashboard…" />}
+      {loading && <LoadingState label="Loading dashboard…" rows={5} />}
       {error && <ErrorState error={error} onRetry={reload} title="Could not load the dashboard" />}
-      {data && data.data.length === 0 && (
-        <EmptyState
-          title="No incidents yet"
-          description="Record a suspicious payment request to see it here."
-          action={<ButtonLink to="/incidents/new">Create the first incident</ButtonLink>}
-        />
-      )}
-      {data && data.data.length > 0 && <DashboardView incidents={data.data} total={data.meta.total} summary={data.summary} caseSummary={data.caseSummary} />}
+      {data && <DashboardView data={data.data} />}
     </>
   );
 }

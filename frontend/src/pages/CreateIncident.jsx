@@ -4,6 +4,7 @@ import { ApiError, api } from "../api/client.js";
 import { Button, Card, PageHeader } from "../components/ui.jsx";
 import { formatINR } from "../lib/format.js";
 import { CHANNELS } from "../lib/risk.js";
+import { useAsync } from "../hooks/useAsync.js";
 import { DEMO_FORM, EMPTY_FORM, mapServerField, parseAmount, toPayload, validateForm } from "../lib/validation.js";
 
 const INPUT =
@@ -49,6 +50,7 @@ export default function CreateIncident() {
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const identities = useAsync((signal) => api.listIdentities(signal), []);
 
   const set = (name) => (event) => {
     const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
@@ -128,6 +130,17 @@ export default function CreateIncident() {
           <div className="grid gap-5 sm:grid-cols-2">
             <Field id="sender_name" label="Sender name" error={errors.sender_name}>
               <input {...control("sender_name")} type="text" autoComplete="off" placeholder="e.g. Arvind Rao" />
+            </Field>
+            <Field id="sender_identity_id" label="Trusted identity" optional error={errors.sender_identity_id}
+              hint="Links the sender to a synthetic profile by stable ID. Without it, the exact name is used as a fallback.">
+              <select {...control("sender_identity_id")}>
+                <option value="">Not linked (match by name)</option>
+                {(identities.data?.data ?? []).map((i) => (
+                  <option key={i.identity_id} value={i.identity_id}>
+                    {i.identity_id} · {i.display_name} ({i.role})
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field id="sender_role" label="Role / title" error={errors.sender_role}>
               <input {...control("sender_role")} type="text" autoComplete="off" placeholder="e.g. Chief Executive Officer" />
